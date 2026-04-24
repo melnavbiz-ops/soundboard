@@ -179,13 +179,8 @@
         async function init() {
           const { data, error } = await db.from('sounds').select('*').order('created_at', {ascending:true});
           if (cancelled) return;
-          if (error) { console.error(error); setAppLoading(false); return; }
-          let list = data || [];
-          if (list.length === 0) {
-            const { data: seeded } = await db.from('sounds')
-              .upsert(SEED_SOUNDS, {onConflict:'id'}).select();
-            list = seeded || SEED_SOUNDS;
-          }
+          if (error) { console.error('load sounds failed:', JSON.stringify(error)); setAppLoading(false); return; }
+          const list = data || [];
           setSounds(list);
           setAppLoading(false);
           list.filter(s => s.has_blob).forEach(s => ensureAudio(s).catch(()=>{}));
@@ -253,12 +248,15 @@
         if (partial.blob) {
           const {error: upErr} = await db.storage.from('audio')
             .upload(id, partial.blob, {contentType: partial.blob.type, upsert: false});
-          if (!upErr) {
-            has_blob = true;
-            const url = `${SUPABASE_URL}/storage/v1/object/public/audio/${id}`;
-            dur = await engine.loadURL(id, url).catch(() => 1.5);
-            audioLoaded[id] = true;
+          if (upErr) {
+            console.error('upload failed:', JSON.stringify(upErr));
+            alert('Upload failed: ' + (upErr.message || 'unknown error'));
+            return null;
           }
+          has_blob = true;
+          const url = `${SUPABASE_URL}/storage/v1/object/public/audio/${id}`;
+          dur = await engine.loadURL(id, url).catch(() => 1.5);
+          audioLoaded[id] = true;
         }
         const newSound = {
           id, name: partial.name || 'New sound',
@@ -267,7 +265,12 @@
           category: partial.category || 'meme',
           fav: false, dur, has_blob,
         };
-        const {data} = await db.from('sounds').insert(newSound).select().single();
+        const {data, error: insErr} = await db.from('sounds').insert(newSound).select().single();
+        if (insErr) {
+          console.error('insert sound failed:', JSON.stringify(insErr));
+          alert('Save failed: ' + (insErr.message || 'unknown error'));
+          return null;
+        }
         if (data) setSounds(ss => ss.find(s => s.id === data.id) ? ss : [...ss, data]);
         return id;
       }, []);
