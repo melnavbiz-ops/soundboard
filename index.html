@@ -1,0 +1,856 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Soundboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#FFF1E6">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%; width: 100%;
+      font-family: 'Nunito', system-ui, sans-serif;
+      background: #FFF1E6;
+      -webkit-tap-highlight-color: transparent;
+      overscroll-behavior: none;
+    }
+    #root { height: 100%; }
+    @keyframes clayWobble {
+      0%,100% { transform: translate(0,-1px) rotate(0deg); }
+      25%     { transform: translate(-1px,-2px) rotate(-2deg); }
+      75%     { transform: translate(1px,-2px) rotate(2deg); }
+    }
+    @keyframes confettiFly {
+      0%   { transform: translate(0,0) rotate(0deg) scale(1); opacity:1; }
+      100% { transform: translate(var(--dx),var(--dy)) rotate(var(--rot)) scale(0.3); opacity:0; }
+    }
+    @keyframes fadeIn  { from{opacity:0} to{opacity:1} }
+    @keyframes slideUp { from{transform:translateY(100%)} to{transform:translateY(0)} }
+    @keyframes pulse   { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    @keyframes spin    { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+    @keyframes popIn   { 0%{transform:scale(0.8);opacity:0} 100%{transform:scale(1);opacity:1} }
+    ::-webkit-scrollbar { display:none; }
+    * { scrollbar-width:none; }
+    input, button { font-family:inherit; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin></script>
+
+  <script type="text/babel">
+    // ─── Supabase client ────────────────────────────────────────────────────────
+    const { createClient } = supabase;
+    const SUPABASE_URL = 'https://ipyxtajwtorgrkujjgdf.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlweXh0YWp3dG9yZ3JrdWpqZ2RmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcwNDExODgsImV4cCI6MjA5MjYxNzE4OH0.ckwAJ_UFgowyOp-yrrkj7Rn3eCGMRLNDIHrkYxdQK0Q';
+    const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    // ─── Palette ────────────────────────────────────────────────────────────────
+    const PALETTE = [
+      {h:20},{h:45},{h:85},{h:130},
+      {h:170},{h:210},{h:250},{h:285},
+      {h:315},{h:345},{h:60},{h:180},
+    ];
+    const padColor     = (i,L=0.78,C=0.17) => `oklch(${L} ${C} ${PALETTE[i%12].h})`;
+    const padColorDeep = (i,L=0.48,C=0.15) => `oklch(${L} ${C} ${PALETTE[i%12].h})`;
+
+    // ─── Seed sounds ────────────────────────────────────────────────────────────
+    const SEED_SOUNDS = [
+      {id:'s1',  name:'Airhorn',    emoji:'📯', color:0,  category:'meme',  fav:true,  dur:1.2, has_blob:false},
+      {id:'s2',  name:'Bruh',       emoji:'😐', color:1,  category:'meme',  fav:false, dur:0.8, has_blob:false},
+      {id:'s3',  name:'Windows XP', emoji:'💿', color:2,  category:'retro', fav:false, dur:3.8, has_blob:false},
+      {id:'s4',  name:'Applause',   emoji:'👏', color:3,  category:'reax',  fav:true,  dur:4.2, has_blob:false},
+      {id:'s5',  name:'Drum Roll',  emoji:'🥁', color:4,  category:'music', fav:false, dur:2.4, has_blob:false},
+      {id:'s6',  name:'Wilhelm',    emoji:'😱', color:5,  category:'meme',  fav:false, dur:1.1, has_blob:false},
+      {id:'s7',  name:'Sad Violin', emoji:'🎻', color:6,  category:'music', fav:false, dur:3.2, has_blob:false},
+      {id:'s8',  name:'Vine Boom',  emoji:'💥', color:7,  category:'meme',  fav:true,  dur:1.8, has_blob:false},
+      {id:'s9',  name:'Crickets',   emoji:'🦗', color:8,  category:'reax',  fav:false, dur:5.0, has_blob:false},
+      {id:'s10', name:'Rimshot',    emoji:'🥁', color:9,  category:'music', fav:false, dur:1.4, has_blob:false},
+      {id:'s11', name:'Fart',       emoji:'💨', color:10, category:'meme',  fav:false, dur:0.9, has_blob:false},
+      {id:'s12', name:'Yeah Boi',   emoji:'😎', color:11, category:'meme',  fav:true,  dur:1.6, has_blob:false},
+    ];
+
+    const CATEGORIES = [
+      {id:'all',  name:'All'},
+      {id:'fav',  name:'Favorites'},
+      {id:'meme', name:'Memes'},
+      {id:'music',name:'Music'},
+      {id:'reax', name:'Reactions'},
+      {id:'retro',name:'Retro'},
+    ];
+
+    // ─── Audio engine ────────────────────────────────────────────────────────────
+    class AudioEngine {
+      constructor() {
+        this._ctx = null; this._buffers = {}; this._source = null;
+        this._startTime = 0; this._duration = 0;
+        this._onProgress = null; this._raf = null; this._onEnd = null;
+      }
+      _getCtx() {
+        if (!this._ctx) this._ctx = new (window.AudioContext || window.webkitAudioContext)();
+        if (this._ctx.state === 'suspended') this._ctx.resume();
+        return this._ctx;
+      }
+      unlock() { this._getCtx(); }
+      async loadURL(id, url) {
+        const ctx = this._getCtx();
+        const res = await fetch(url);
+        const ab  = await res.arrayBuffer();
+        const buf = await ctx.decodeAudioData(ab);
+        this._buffers[id] = buf;
+        return buf.duration;
+      }
+      _makeSynthetic(duration) {
+        const ctx = this._getCtx();
+        const sr  = ctx.sampleRate;
+        const n   = Math.ceil(sr * duration);
+        const buf = ctx.createBuffer(1, n, sr);
+        const d   = buf.getChannelData(0);
+        const f   = 180 + Math.random() * 200;
+        for (let i = 0; i < n; i++) {
+          const env = Math.min(1, i/(sr*0.015)) * Math.max(0, 1 - i/n);
+          d[i] = Math.sin(2*Math.PI*f*i/sr) * env * 0.25;
+        }
+        return buf;
+      }
+      play(id, duration, loop, onProgress, onEnd) {
+        this.stop();
+        const ctx = this._getCtx();
+        const buf = this._buffers[id] || this._makeSynthetic(duration);
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.loop   = loop;
+        src.connect(ctx.destination);
+        src.start(0);
+        if (!loop) src.onended = () => { this._source = null; onEnd && onEnd(); };
+        this._source = src; this._startTime = ctx.currentTime;
+        this._duration = buf.duration; this._onProgress = onProgress;
+        this._tick();
+      }
+      _tick() {
+        if (!this._source) return;
+        const elapsed = this._getCtx().currentTime - this._startTime;
+        const dur = this._duration;
+        const p   = this._source.loop ? (elapsed % dur) / dur : Math.min(elapsed / dur, 1);
+        this._onProgress && this._onProgress(p);
+        if (p < 1 || this._source?.loop) this._raf = requestAnimationFrame(() => this._tick());
+      }
+      stop() {
+        if (this._source) { try { this._source.stop(); } catch(_){} this._source = null; }
+        if (this._raf)    { cancelAnimationFrame(this._raf); this._raf = null; }
+        this._onProgress && this._onProgress(0);
+      }
+    }
+    const engine = new AudioEngine();
+
+    // ─── Audio cache + loader ───────────────────────────────────────────────────
+    const audioLoaded = {};
+    async function ensureAudio(sound) {
+      if (!sound.has_blob || audioLoaded[sound.id]) return;
+      audioLoaded[sound.id] = true;
+      const url = `${SUPABASE_URL}/storage/v1/object/public/audio/${sound.id}`;
+      await engine.loadURL(sound.id, url);
+    }
+
+    // ─── useSoundboard ──────────────────────────────────────────────────────────
+    function useSoundboard() {
+      const [sounds,     setSounds]     = React.useState([]);
+      const [playingId,  setPlayingId]  = React.useState(null);
+      const [loadingId,  setLoadingId]  = React.useState(null);
+      const [progress,   setProgress]   = React.useState(0);
+      const [loop,       setLoop]       = React.useState(false);
+      const [category,   setCategory]   = React.useState('all');
+      const [addOpen,    setAddOpen]    = React.useState(false);
+      const [appLoading, setAppLoading] = React.useState(true);
+      const [syncDot,    setSyncDot]    = React.useState(false);
+      const loopRef    = React.useRef(loop);
+      loopRef.current  = loop;
+
+      React.useEffect(() => {
+        let cancelled = false;
+        async function init() {
+          const { data, error } = await db.from('sounds').select('*').order('created_at', {ascending:true});
+          if (cancelled) return;
+          if (error) { console.error(error); setAppLoading(false); return; }
+          let list = data || [];
+          if (list.length === 0) {
+            const { data: seeded } = await db.from('sounds')
+              .upsert(SEED_SOUNDS, {onConflict:'id'}).select();
+            list = seeded || SEED_SOUNDS;
+          }
+          setSounds(list);
+          setAppLoading(false);
+          list.filter(s => s.has_blob).forEach(s => ensureAudio(s).catch(()=>{}));
+        }
+        init();
+
+        const channel = db.channel('sounds-live')
+          .on('postgres_changes', {event:'*', schema:'public', table:'sounds'}, payload => {
+            if (cancelled) return;
+            setSyncDot(true);
+            setTimeout(() => setSyncDot(false), 1200);
+            if (payload.eventType === 'INSERT') {
+              setSounds(ss => ss.find(s => s.id === payload.new.id) ? ss : [...ss, payload.new]);
+              if (payload.new.has_blob) ensureAudio(payload.new).catch(()=>{});
+            } else if (payload.eventType === 'UPDATE') {
+              setSounds(ss => ss.map(s => s.id === payload.new.id ? payload.new : s));
+            } else if (payload.eventType === 'DELETE') {
+              setSounds(ss => ss.filter(s => s.id !== payload.old.id));
+            }
+          })
+          .subscribe();
+
+        return () => { cancelled = true; db.removeChannel(channel); };
+      }, []);
+
+      const filtered = React.useMemo(() => {
+        if (category === 'all') return sounds;
+        if (category === 'fav') return sounds.filter(s => s.fav);
+        return sounds.filter(s => s.category === category);
+      }, [sounds, category]);
+
+      const stop = React.useCallback(() => {
+        engine.stop(); setPlayingId(null); setProgress(0);
+      }, []);
+
+      const play = React.useCallback(async (id) => {
+        engine.unlock(); // must happen before any await (iOS Safari)
+        const sound = sounds.find(s => s.id === id);
+        if (!sound || loadingId) return;
+        engine.stop(); setPlayingId(null); setProgress(0);
+        if (sound.has_blob && !audioLoaded[id]) {
+          setLoadingId(id);
+          try { await ensureAudio(sound); }
+          catch(e) { setLoadingId(null); return; }
+          setLoadingId(null);
+        }
+        setPlayingId(id);
+        engine.play(id, sound.dur, loopRef.current,
+          p => setProgress(p),
+          () => { setPlayingId(null); setProgress(0); }
+        );
+      }, [sounds, loadingId]);
+
+      const toggleFav = React.useCallback(async (id) => {
+        const s = sounds.find(s => s.id === id);
+        if (!s) return;
+        const fav = !s.fav;
+        setSounds(ss => ss.map(s => s.id === id ? {...s, fav} : s));
+        await db.from('sounds').update({fav}).eq('id', id);
+      }, [sounds]);
+
+      const addSound = React.useCallback(async (partial) => {
+        const id = 'u' + Date.now();
+        let dur = 1.5, has_blob = false;
+        if (partial.blob) {
+          const {error: upErr} = await db.storage.from('audio')
+            .upload(id, partial.blob, {contentType: partial.blob.type, upsert: false});
+          if (!upErr) {
+            has_blob = true;
+            const url = `${SUPABASE_URL}/storage/v1/object/public/audio/${id}`;
+            dur = await engine.loadURL(id, url).catch(() => 1.5);
+            audioLoaded[id] = true;
+          }
+        }
+        const newSound = {
+          id, name: partial.name || 'New sound',
+          emoji: partial.emoji || '🔊',
+          color: partial.color ?? 0,
+          category: partial.category || 'meme',
+          fav: false, dur, has_blob,
+        };
+        const {data} = await db.from('sounds').insert(newSound).select().single();
+        if (data) setSounds(ss => ss.find(s => s.id === data.id) ? ss : [...ss, data]);
+        return id;
+      }, []);
+
+      const deleteSound = React.useCallback(async (id) => {
+        if (playingId === id) stop();
+        const s = sounds.find(s => s.id === id);
+        if (s?.has_blob) await db.storage.from('audio').remove([id]).catch(()=>{});
+        await db.from('sounds').delete().eq('id', id);
+        setSounds(ss => ss.filter(s => s.id !== id));
+      }, [playingId, sounds, stop]);
+
+      // Restart playback when loop toggles mid-play
+      const prevLoop = React.useRef(loop);
+      React.useEffect(() => {
+        if (prevLoop.current !== loop && playingId) {
+          const id = playingId; stop(); setTimeout(() => play(id), 0);
+        }
+        prevLoop.current = loop;
+      }, [loop]);
+
+      return {
+        sounds, filtered, playingId, loadingId, progress,
+        loop, setLoop, category, setCategory,
+        addOpen, setAddOpen, play, stop, toggleFav, addSound, deleteSound,
+        appLoading, syncDot,
+      };
+    }
+
+    // ─── ClayPad ────────────────────────────────────────────────────────────────
+    function ClayPad({sound, tilt, active, loading, progress, onTap, onToggleFav, onDelete}) {
+      const [pressed,   setPressed]   = React.useState(false);
+      const [confetti,  setConfetti]  = React.useState([]);
+      const [showMenu,  setShowMenu]  = React.useState(false);
+      const longTimer = React.useRef(null);
+
+      const triggerConfetti = () => {
+        const bits = Array.from({length:8}).map((_,i) => ({
+          id: Math.random(),
+          dx: (Math.random()-0.5)*80,
+          dy: -Math.random()*60-20,
+          rot: (Math.random()-0.5)*360,
+          color: padColor((sound.color+i)%12),
+        }));
+        setConfetti(bits);
+        setTimeout(() => setConfetti([]), 800);
+      };
+
+      const onStart = () => {
+        setPressed(true);
+        longTimer.current = setTimeout(() => setShowMenu(true), 500);
+      };
+      const onEnd = () => {
+        setPressed(false);
+        clearTimeout(longTimer.current);
+        if (!showMenu) { triggerConfetti(); onTap(); }
+      };
+      const onLeave = () => { setPressed(false); clearTimeout(longTimer.current); };
+
+      const base = padColor(sound.color, 0.82, 0.18);
+      const deep = padColorDeep(sound.color, 0.48, 0.15);
+
+      return (
+        <div style={{position:'relative', transform:`rotate(${tilt}deg)`}}>
+          {showMenu && (
+            <div onClick={e=>{e.stopPropagation();setShowMenu(false);}}
+              style={{position:'fixed',inset:0,zIndex:50}} />
+          )}
+          {showMenu && (
+            <div style={{
+              position:'absolute', top:'50%', left:'50%',
+              transform:'translate(-50%,-50%)',
+              zIndex:51, background:'#2A1F3D', borderRadius:16,
+              border:'3px solid #FFF1E6',
+              boxShadow:'4px 4px 0 oklch(0.72 0.22 30)',
+              overflow:'hidden', minWidth:140,
+              animation:'popIn .18s ease',
+            }}>
+              <button onClick={()=>{onToggleFav();setShowMenu(false);}} style={{
+                display:'block',width:'100%',padding:'13px 18px',
+                fontSize:14,fontWeight:900,textAlign:'left',
+                background:'none',border:'none',color:'#FFF1E6',cursor:'pointer',
+                borderBottom:'1.5px solid rgba(255,241,230,0.15)',
+              }}>{sound.fav ? '☆ Unfavorite' : '★ Favorite'}</button>
+              <button onClick={()=>{onDelete();setShowMenu(false);}} style={{
+                display:'block',width:'100%',padding:'13px 18px',
+                fontSize:14,fontWeight:900,textAlign:'left',
+                background:'none',border:'none',
+                color:'oklch(0.75 0.22 25)',cursor:'pointer',
+              }}>🗑 Delete</button>
+            </div>
+          )}
+
+          <div
+            onMouseDown={onStart} onMouseUp={onEnd} onMouseLeave={onLeave}
+            onTouchStart={e=>{e.preventDefault();onStart();}}
+            onTouchEnd={e=>{e.preventDefault();onEnd();}}
+            onTouchCancel={onLeave}
+            style={{
+              position:'relative', aspectRatio:'1/1', borderRadius:20,
+              background: base,
+              border:'3px solid #2A1F3D',
+              boxShadow: pressed
+                ? '2px 2px 0 #2A1F3D'
+                : `5px 5px 0 #2A1F3D, inset 0 -6px 0 ${deep}88`,
+              transform: pressed
+                ? 'translate(3px,3px)'
+                : active ? 'translate(0,-1px)' : 'translate(0,0)',
+              transition:'transform .1s cubic-bezier(.2,.8,.3,1.2), box-shadow .1s',
+              cursor:'pointer', userSelect:'none', WebkitUserSelect:'none',
+              display:'flex', flexDirection:'column', padding:10,
+              animation: active ? 'clayWobble 0.4s ease-in-out infinite' : 'none',
+              opacity: loading ? 0.7 : 1,
+            }}
+          >
+            {sound.fav && (
+              <div style={{
+                position:'absolute', top:-8, right:-8,
+                width:26, height:26, borderRadius:'50%',
+                background:'oklch(0.85 0.2 85)', border:'2.5px solid #2A1F3D',
+                display:'flex', alignItems:'center', justifyContent:'center',
+                fontSize:12, fontWeight:900,
+                boxShadow:'2px 2px 0 #2A1F3D', transform:'rotate(15deg)',
+              }}>★</div>
+            )}
+
+            <div style={{
+              flex:1, display:'flex', alignItems:'center', justifyContent:'center',
+              fontSize:'clamp(28px,8vw,40px)', lineHeight:1,
+              filter:'drop-shadow(2px 2px 0 rgba(42,31,61,0.2))',
+            }}>
+              {loading
+                ? <div style={{width:28,height:28,borderRadius:'50%',border:'3px solid #2A1F3D',borderTopColor:'transparent',animation:'spin 0.7s linear infinite'}} />
+                : sound.emoji}
+            </div>
+
+            <div style={{
+              fontSize:'clamp(9px,2.5vw,11px)', fontWeight:900,
+              textAlign:'center', color:'#2A1F3D', letterSpacing:-0.2,
+              whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+              textTransform:'uppercase',
+            }}>{sound.name}</div>
+
+            {active && (
+              <div style={{position:'absolute',left:3,right:3,bottom:3,height:4,borderRadius:2,overflow:'hidden',background:'rgba(42,31,61,0.25)'}}>
+                <div style={{height:'100%',width:`${progress*100}%`,background:'#2A1F3D',transition:'width .05s linear'}} />
+              </div>
+            )}
+          </div>
+
+          {confetti.map(b => (
+            <div key={b.id} style={{
+              position:'absolute', top:'50%', left:'50%',
+              width:8, height:8, borderRadius:2,
+              background:b.color, border:'1.5px solid #2A1F3D',
+              pointerEvents:'none',
+              '--dx':`${b.dx}px`,'--dy':`${b.dy}px`,'--rot':`${b.rot}deg`,
+              animation:'confettiFly 0.7s ease-out forwards',
+            }} />
+          ))}
+        </div>
+      );
+    }
+
+    // ─── AddSoundModal ──────────────────────────────────────────────────────────
+    const EMOJI_OPTS = ['🔊','🎵','📯','🥁','💥','👏','😂','🎺','🎻','🎸','🔔','⚡','💨','😱','😐','😎','🦗','💿','🎉','🔥'];
+
+    function AddSoundModal({open, onClose, onAdd}) {
+      const [name,       setName]       = React.useState('');
+      const [emoji,      setEmoji]      = React.useState('🔊');
+      const [color,      setColor]      = React.useState(0);
+      const [category,   setCategory]   = React.useState('meme');
+      const [file,       setFile]       = React.useState(null);
+      const [recording,  setRecording]  = React.useState(false);
+      const [recTime,    setRecTime]    = React.useState(0);
+      const [recBlob,    setRecBlob]    = React.useState(null);
+      const [uploading,  setUploading]  = React.useState(false);
+      const mediaRef = React.useRef(null);
+      const chunksRef = React.useRef([]);
+      const rafRef   = React.useRef(null);
+      const startRef = React.useRef(0);
+
+      React.useEffect(() => {
+        if (!open) {
+          setName(''); setEmoji('🔊'); setColor(0); setCategory('meme');
+          setFile(null); setRecording(false); setRecTime(0); setRecBlob(null); setUploading(false);
+          if (mediaRef.current) { try{mediaRef.current.stop();}catch(_){} mediaRef.current=null; }
+        }
+      }, [open]);
+
+      const startRec = async () => {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+          chunksRef.current = [];
+          const mr = new MediaRecorder(stream);
+          mr.ondataavailable = e => { if (e.data.size>0) chunksRef.current.push(e.data); };
+          mr.onstop = () => {
+            const blob = new Blob(chunksRef.current, {type:'audio/webm'});
+            setRecBlob(blob); setFile('mic-recording.webm');
+            stream.getTracks().forEach(t=>t.stop());
+            cancelAnimationFrame(rafRef.current);
+          };
+          mr.start(); mediaRef.current = mr;
+          setRecording(true); setRecBlob(null);
+          startRef.current = performance.now();
+          const tick = () => { setRecTime((performance.now()-startRef.current)/1000); rafRef.current=requestAnimationFrame(tick); };
+          rafRef.current = requestAnimationFrame(tick);
+        } catch(_) { alert('Microphone access denied.'); }
+      };
+
+      const stopRec = () => {
+        if (mediaRef.current) { mediaRef.current.stop(); mediaRef.current=null; }
+        setRecording(false);
+      };
+
+      const handleFile = e => {
+        const f = e.target.files[0];
+        if (!f) return;
+        setFile(f.name); setRecBlob(f);
+        if (!name) setName(f.name.replace(/\.[^.]+$/,'').replace(/[-_]/g,' ').slice(0,24));
+      };
+
+      const handleSubmit = async () => {
+        if (!name.trim() || uploading) return;
+        setUploading(true);
+        await onAdd({name:name.trim(), emoji, color, category, blob:recBlob});
+        onClose();
+      };
+
+      if (!open) return null;
+
+      return (
+        <div onClick={onClose} style={{
+          position:'fixed',inset:0,zIndex:200,
+          background:'rgba(40,30,60,0.55)',
+          display:'flex',alignItems:'flex-end',
+          animation:'fadeIn .2s ease',
+        }}>
+          <div onClick={e=>e.stopPropagation()} style={{
+            width:'100%', maxHeight:'92vh', overflowY:'auto',
+            background:'#FFF1E6',
+            border:'3px solid #2A1F3D',
+            borderTopLeftRadius:32, borderTopRightRadius:32,
+            padding:'22px 24px max(40px,env(safe-area-inset-bottom))',
+            boxShadow:'8px 8px 0 #2A1F3D',
+            animation:'slideUp .3s cubic-bezier(.2,.9,.3,1.1)',
+          }}>
+            <div style={{width:40,height:5,borderRadius:3,background:'#2A1F3D',opacity:0.2,margin:'0 auto 18px'}} />
+            <h2 style={{fontSize:26,fontWeight:900,color:'#2A1F3D',letterSpacing:-0.5}}>Add a sound</h2>
+            <p style={{marginTop:4,marginBottom:22,fontSize:14,color:'#2A1F3D',opacity:0.6}}>Upload a file or record from your mic.</p>
+
+            {/* Source */}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:18}}>
+              <label style={{
+                display:'flex',flexDirection:'column',alignItems:'center',gap:6,
+                padding:'18px 10px',borderRadius:16,cursor:'pointer',
+                background: file && !recording ? 'oklch(0.72 0.22 145)' : 'rgba(42,31,61,0.06)',
+                border:'2.5px solid #2A1F3D',transition:'background .2s',
+              }}>
+                <input type="file" accept="audio/*" style={{display:'none'}} onChange={handleFile} />
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#2A1F3D" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+                <div style={{fontSize:12,fontWeight:900,color:'#2A1F3D',textAlign:'center',maxWidth:90,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                  {file && !recording ? file : 'Upload'}
+                </div>
+              </label>
+
+              <button onClick={recording ? stopRec : startRec} style={{
+                display:'flex',flexDirection:'column',alignItems:'center',gap:6,
+                padding:'18px 10px',borderRadius:16,
+                background: recording ? 'oklch(0.65 0.22 25)' : recBlob ? 'oklch(0.72 0.22 30)' : 'rgba(42,31,61,0.06)',
+                color: recording || recBlob ? '#fff' : '#2A1F3D',
+                border:'2.5px solid #2A1F3D',cursor:'pointer',
+              }}>
+                <div style={{
+                  width:26,height:26,borderRadius:'50%',
+                  background: recording ? '#fff' : 'oklch(0.65 0.22 25)',
+                  animation: recording ? 'pulse 1s infinite' : 'none',
+                  boxShadow: recording ? '0 0 0 5px rgba(255,80,50,0.3)' : 'none',
+                  transition:'box-shadow .3s',
+                }} />
+                <div style={{fontSize:12,fontWeight:900}}>
+                  {recording ? `${recTime.toFixed(1)}s — stop` : recBlob ? 'Re-record' : 'Record'}
+                </div>
+              </button>
+            </div>
+
+            {/* Name */}
+            <label style={{fontSize:11,textTransform:'uppercase',letterSpacing:1.2,fontWeight:900,color:'#2A1F3D',opacity:0.5}}>Name</label>
+            <input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Epic Fail" maxLength={24}
+              style={{
+                display:'block',width:'100%',padding:'12px 14px',marginTop:6,marginBottom:18,
+                fontSize:17,fontWeight:700,
+                background:'rgba(42,31,61,0.05)',color:'#2A1F3D',
+                border:'2.5px solid #2A1F3D',outline:'none',borderRadius:12,
+              }} />
+
+            {/* Category */}
+            <label style={{fontSize:11,textTransform:'uppercase',letterSpacing:1.2,fontWeight:900,color:'#2A1F3D',opacity:0.5}}>Category</label>
+            <div style={{display:'flex',gap:6,marginTop:6,marginBottom:18,flexWrap:'wrap'}}>
+              {CATEGORIES.filter(c=>c.id!=='all'&&c.id!=='fav').map(c => (
+                <button key={c.id} onClick={()=>setCategory(c.id)} style={{
+                  padding:'6px 12px',borderRadius:10,cursor:'pointer',
+                  fontSize:13,fontWeight:900,
+                  background: category===c.id ? '#2A1F3D' : 'rgba(42,31,61,0.06)',
+                  color: category===c.id ? '#FFF1E6' : '#2A1F3D',
+                  border:'2px solid #2A1F3D',
+                  boxShadow: category===c.id ? '2px 2px 0 oklch(0.72 0.22 30)' : '2px 2px 0 #2A1F3D',
+                  transition:'all .15s',
+                }}>{c.name}</button>
+              ))}
+            </div>
+
+            {/* Emoji */}
+            <label style={{fontSize:11,textTransform:'uppercase',letterSpacing:1.2,fontWeight:900,color:'#2A1F3D',opacity:0.5}}>Icon</label>
+            <div style={{display:'flex',gap:6,marginTop:6,marginBottom:18,flexWrap:'wrap'}}>
+              {EMOJI_OPTS.map(e => (
+                <button key={e} onClick={()=>setEmoji(e)} style={{
+                  width:40,height:40,borderRadius:12,fontSize:20,cursor:'pointer',
+                  background: emoji===e ? 'rgba(42,31,61,0.1)' : 'transparent',
+                  border:`2px solid ${emoji===e?'#2A1F3D':'transparent'}`,
+                  transform: emoji===e ? 'scale(1.15)' : 'scale(1)',
+                  transition:'transform .15s',
+                }}>{e}</button>
+              ))}
+            </div>
+
+            {/* Color */}
+            <label style={{fontSize:11,textTransform:'uppercase',letterSpacing:1.2,fontWeight:900,color:'#2A1F3D',opacity:0.5}}>Color</label>
+            <div style={{display:'flex',gap:8,marginTop:6,marginBottom:28,flexWrap:'wrap'}}>
+              {PALETTE.map((p,i) => (
+                <button key={i} onClick={()=>setColor(i)} style={{
+                  width:32,height:32,borderRadius:'50%',
+                  background:padColor(i),cursor:'pointer',
+                  border:`3px solid ${color===i?'#2A1F3D':'transparent'}`,
+                  transform: color===i ? 'scale(1.2)' : 'scale(1)',
+                  transition:'transform .15s',
+                  boxShadow: color===i ? '2px 2px 0 #2A1F3D' : 'none',
+                }} />
+              ))}
+            </div>
+
+            <button onClick={handleSubmit} disabled={!name.trim()||uploading} style={{
+              width:'100%',padding:'16px',border:'3px solid #2A1F3D',borderRadius:16,
+              fontSize:17,fontWeight:900,
+              background: name.trim()&&!uploading ? '#2A1F3D' : 'rgba(42,31,61,0.2)',
+              color: name.trim()&&!uploading ? '#FFF1E6' : '#2A1F3D',
+              cursor: name.trim()&&!uploading ? 'pointer' : 'not-allowed',
+              boxShadow: name.trim()&&!uploading ? '4px 4px 0 oklch(0.72 0.22 30)' : 'none',
+              transition:'all .15s',
+              display:'flex',alignItems:'center',justifyContent:'center',gap:10,
+            }}>
+              {uploading && <div style={{width:18,height:18,borderRadius:'50%',border:'2.5px solid #FFF1E6',borderTopColor:'transparent',animation:'spin 0.7s linear infinite'}} />}
+              {uploading ? 'Uploading…' : 'Add to board'}
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── Stable tilts ───────────────────────────────────────────────────────────
+    function useTilts(sounds) {
+      return React.useMemo(() => {
+        const m = {};
+        sounds.forEach(s => {
+          let h = 0;
+          for (let i = 0; i < s.id.length; i++) h = (h*31 + s.id.charCodeAt(i)) | 0;
+          m[s.id] = ((h%100)/100 - 0.5) * 6;
+        });
+        return m;
+      }, [sounds]);
+    }
+
+    // ─── App ────────────────────────────────────────────────────────────────────
+    function App() {
+      const sb = useSoundboard();
+      const {
+        sounds, filtered, playingId, loadingId, progress,
+        loop, setLoop, category, setCategory,
+        addOpen, setAddOpen, play, stop, toggleFav, addSound, deleteSound,
+        appLoading, syncDot,
+      } = sb;
+      const activeSound = sounds.find(s => s.id === playingId);
+      const tilts = useTilts(sounds);
+
+      if (appLoading) return (
+        <div style={{
+          height:'100%', display:'flex', flexDirection:'column',
+          alignItems:'center', justifyContent:'center',
+          background:'#FFF1E6', gap:16,
+        }}>
+          <div style={{fontSize:52}}>🎉</div>
+          <div style={{
+            fontSize:22, fontWeight:900, color:'#2A1F3D',
+            letterSpacing:-1,
+          }}>Loading board…</div>
+          <div style={{
+            width:40,height:40,borderRadius:'50%',
+            border:'4px solid #2A1F3D',borderTopColor:'transparent',
+            animation:'spin 0.7s linear infinite',
+          }} />
+        </div>
+      );
+
+      return (
+        <div style={{
+          width:'100%', height:'100%',
+          background:'#FFF1E6', color:'#2A1F3D',
+          fontFamily:'"Nunito",system-ui,sans-serif',
+          position:'relative', overflow:'hidden',
+          display:'flex', flexDirection:'column',
+          paddingTop:'env(safe-area-inset-top)',
+        }}>
+          {/* Dotted bg */}
+          <div style={{
+            position:'absolute',inset:0,pointerEvents:'none',
+            backgroundImage:'radial-gradient(#2A1F3D 1.2px, transparent 1.2px)',
+            backgroundSize:'20px 20px', opacity:0.08,
+          }} />
+
+          {/* Real-time sync dot */}
+          {syncDot && (
+            <div style={{
+              position:'absolute', top:14, right:14, zIndex:10,
+              width:10, height:10, borderRadius:'50%',
+              background:'oklch(0.72 0.22 145)',
+              border:'2px solid #2A1F3D',
+              boxShadow:'2px 2px 0 #2A1F3D',
+              animation:'popIn .3s ease',
+            }} title="New sound synced!" />
+          )}
+
+          {/* Header */}
+          <div style={{padding:'clamp(14px,5vw,20px) clamp(14px,5vw,20px) 0',position:'relative',zIndex:2}}>
+            <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:12}}>
+              <div>
+                <div style={{
+                  display:'inline-block',padding:'4px 10px',borderRadius:8,
+                  background:'oklch(0.8 0.2 60)',color:'#2A1F3D',
+                  fontSize:11,fontWeight:900,letterSpacing:1.5,textTransform:'uppercase',
+                  border:'2px solid #2A1F3D',transform:'rotate(-2deg)',
+                  boxShadow:'3px 3px 0 #2A1F3D',
+                }}>My Board</div>
+                <h1 style={{
+                  margin:'10px 0 0',
+                  fontSize:'clamp(28px,9vw,40px)',
+                  fontWeight:900,letterSpacing:-2,lineHeight:0.95,color:'#2A1F3D',
+                }}>BONK!<br />
+                  <span style={{fontSize:'clamp(14px,4.5vw,18px)',fontWeight:700,letterSpacing:0,color:'oklch(0.55 0.2 340)'}}>
+                    tap any pad to party
+                  </span>
+                </h1>
+              </div>
+              <button onClick={()=>setAddOpen(true)} style={{
+                width:52,height:52,borderRadius:16,flexShrink:0,
+                background:'oklch(0.72 0.22 145)',color:'#2A1F3D',
+                border:'3px solid #2A1F3D',cursor:'pointer',
+                fontSize:30,fontWeight:900,lineHeight:1,
+                boxShadow:'4px 4px 0 #2A1F3D',transform:'rotate(3deg)',
+                display:'flex',alignItems:'center',justifyContent:'center',
+              }}>+</button>
+            </div>
+          </div>
+
+          {/* Category chips */}
+          <div style={{
+            display:'flex',gap:8,
+            padding:'clamp(12px,4vw,20px) clamp(14px,5vw,20px) 10px',
+            overflowX:'auto',position:'relative',zIndex:2,
+          }}>
+            {CATEGORIES.map((c,i) => (
+              <button key={c.id} onClick={()=>setCategory(c.id)} style={{
+                padding:'7px 14px',borderRadius:12,cursor:'pointer',
+                fontSize:13,fontWeight:900,fontFamily:'inherit',
+                background: category===c.id ? '#2A1F3D' : '#FFF1E6',
+                color:      category===c.id ? '#FFF1E6' : '#2A1F3D',
+                border:'2.5px solid #2A1F3D',
+                boxShadow: category===c.id ? '2px 2px 0 oklch(0.72 0.22 30)' : '2px 2px 0 #2A1F3D',
+                transform:`rotate(${i%2===0?-1:1}deg)`,
+                whiteSpace:'nowrap',flexShrink:0,transition:'all .15s',
+              }}>{c.name}</button>
+            ))}
+          </div>
+
+          {/* Pad grid */}
+          <div style={{
+            flex:1,
+            padding:`14px clamp(14px,5vw,20px) ${activeSound?170:90}px`,
+            overflowY:'auto',position:'relative',zIndex:2,
+          }}>
+            {filtered.length === 0 ? (
+              <div style={{textAlign:'center',padding:'40px 20px',fontSize:15,fontWeight:700,color:'#2A1F3D',opacity:0.4}}>
+                No sounds here yet.<br />Tap + to add one!
+              </div>
+            ) : (
+              <div style={{
+                display:'grid',
+                gridTemplateColumns:'repeat(3,1fr)',
+                gap:'clamp(10px,3vw,16px)',
+              }}>
+                {filtered.map(s => (
+                  <ClayPad key={s.id} sound={s} tilt={tilts[s.id]||0}
+                    active={playingId===s.id}
+                    loading={loadingId===s.id}
+                    progress={playingId===s.id ? progress : 0}
+                    onTap={()=>play(s.id)}
+                    onToggleFav={()=>toggleFav(s.id)}
+                    onDelete={()=>deleteSound(s.id)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Bottom player */}
+          <div style={{
+            position:'absolute',
+            left:'clamp(8px,3vw,12px)', right:'clamp(8px,3vw,12px)',
+            bottom:'max(24px,calc(env(safe-area-inset-bottom) + 12px))',
+            zIndex:3,
+            background:'#2A1F3D',color:'#FFF1E6',
+            border:'3px solid #2A1F3D',
+            borderRadius:20,padding:'14px 16px',
+            display:'flex',alignItems:'center',gap:12,
+            boxShadow:'6px 6px 0 oklch(0.72 0.22 30)',
+          }}>
+            <div style={{
+              width:44,height:44,borderRadius:12,flexShrink:0,
+              background: activeSound ? padColor(activeSound.color) : 'rgba(255,241,230,0.15)',
+              border:'2.5px solid #FFF1E6',
+              display:'flex',alignItems:'center',justifyContent:'center',fontSize:22,
+              transform: activeSound ? `rotate(${Math.sin(progress*20)*8}deg)` : 'rotate(0)',
+              transition:'background .3s',
+            }}>{activeSound ? activeSound.emoji : '🎉'}</div>
+
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:15,fontWeight:900,letterSpacing:-0.3,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                {activeSound ? activeSound.name.toUpperCase() : 'READY TO PARTY!'}
+              </div>
+              <div style={{height:8,marginTop:6,borderRadius:4,background:'rgba(255,241,230,0.15)',overflow:'hidden',border:'1.5px solid #FFF1E6'}}>
+                <div style={{height:'100%',width:`${progress*100}%`,background:activeSound?padColor(activeSound.color):'#FFF1E6',transition:'width .05s linear',borderRadius:4}} />
+              </div>
+            </div>
+
+            {/* Loop */}
+            <button onClick={()=>setLoop(l=>!l)} style={{
+              width:38,height:38,borderRadius:10,flexShrink:0,
+              background: loop ? 'oklch(0.8 0.2 60)' : 'rgba(255,241,230,0.1)',
+              color:'#FFF1E6', border:'2px solid rgba(255,241,230,0.4)',
+              cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',
+              transition:'background .2s',
+            }} title={loop ? 'Loop on' : 'Loop off'}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="17 1 21 5 17 9"/>
+                <path d="M3 11V9a4 4 0 0 1 4-4h14"/>
+                <polyline points="7 23 3 19 7 15"/>
+                <path d="M21 13v2a4 4 0 0 1-4 4H3"/>
+              </svg>
+            </button>
+
+            {/* Stop */}
+            <button onClick={()=>playingId&&stop()} style={{
+              width:46,height:46,borderRadius:'50%',flexShrink:0,
+              background:'oklch(0.72 0.22 30)',color:'#2A1F3D',
+              border:'2.5px solid rgba(255,241,230,0.5)',
+              cursor:playingId?'pointer':'default',
+              display:'flex',alignItems:'center',justifyContent:'center',
+              opacity:playingId?1:0.5,transition:'opacity .2s',
+            }}>
+              {playingId
+                ? <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+                : <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>}
+            </button>
+          </div>
+
+          <AddSoundModal open={addOpen} onClose={()=>setAddOpen(false)} onAdd={addSound} />
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
