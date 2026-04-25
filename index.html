@@ -121,9 +121,10 @@
         }
         return buf;
       }
-      play(id, duration, loop, onProgress, onEnd) {
+      async play(id, duration, loop, onProgress, onEnd) {
         this.stop();
         const ctx = this._getCtx();
+        if (ctx.state === 'suspended') { try { await ctx.resume(); } catch(_){} }
         const buf = this._buffers[id] || this._makeSynthetic(duration);
         const src = ctx.createBufferSource();
         src.buffer = buf;
