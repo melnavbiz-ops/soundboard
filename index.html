@@ -364,6 +364,22 @@
         engine.stop(); setPlayingId(null); setProgress(0);
       }, []);
 
+      const [refreshing, setRefreshing] = React.useState(false);
+      const refresh = React.useCallback(async () => {
+        setRefreshing(true);
+        try {
+          const { data, error } = await db.from('sounds').select('*').order('created_at', {ascending:true});
+          if (!error) {
+            setSounds(data || []);
+            (data || []).filter(s => s.has_blob).forEach(s => ensureAudio(s).catch(()=>{}));
+            setSyncDot(true);
+            setTimeout(() => setSyncDot(false), 1200);
+          }
+        } finally {
+          setRefreshing(false);
+        }
+      }, []);
+
       const play = React.useCallback(async (id) => {
         engine.unlock(); // must happen before any await (iOS Safari)
         const sound = sounds.find(s => s.id === id);
@@ -463,7 +479,7 @@
         sounds, filtered, playingId, loadingId, progress,
         loop, setLoop, category, setCategory,
         addOpen, setAddOpen, play, stop, toggleFav, addSound, deleteSound,
-        appLoading, syncDot,
+        appLoading, syncDot, refresh, refreshing,
       };
     }
 
@@ -579,6 +595,7 @@
               textAlign:'center', color:'#2A1F3D', letterSpacing:-0.2,
               whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
               textTransform:'uppercase',
+              minWidth:0, maxWidth:'100%',
             }}>{sound.name}</div>
 
             {active && (
@@ -820,7 +837,7 @@
         sounds, filtered, playingId, loadingId, progress,
         loop, setLoop, category, setCategory,
         addOpen, setAddOpen, play, stop, toggleFav, addSound, deleteSound,
-        appLoading, syncDot,
+        appLoading, syncDot, refresh, refreshing,
       } = sb;
       const activeSound = sounds.find(s => s.id === playingId);
       const tilts = useTilts(sounds);
@@ -913,14 +930,37 @@
                   </span>
                 </h1>
               </div>
-              <button onClick={()=>setAddOpen(true)} style={{
-                width:52,height:52,borderRadius:16,flexShrink:0,
-                background:'oklch(0.72 0.22 145)',color:'#2A1F3D',
-                border:'3px solid #2A1F3D',cursor:'pointer',
-                fontSize:30,fontWeight:900,lineHeight:1,
-                boxShadow:'4px 4px 0 #2A1F3D',transform:'rotate(3deg)',
-                display:'flex',alignItems:'center',justifyContent:'center',
-              }}>+</button>
+              <div style={{display:'flex', gap:10, alignItems:'flex-start', flexShrink:0}}>
+                <button
+                  onClick={refresh}
+                  disabled={refreshing}
+                  aria-label="Refresh"
+                  title="Refresh"
+                  style={{
+                    width:52,height:52,borderRadius:16,
+                    background:'oklch(0.85 0.15 220)', color:'#2A1F3D',
+                    border:'3px solid #2A1F3D', cursor: refreshing ? 'wait' : 'pointer',
+                    boxShadow:'4px 4px 0 #2A1F3D', transform:'rotate(-3deg)',
+                    display:'flex', alignItems:'center', justifyContent:'center',
+                    padding:0,
+                  }}>
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2A1F3D"
+                       strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round"
+                       style={{animation: refreshing ? 'spin 0.7s linear infinite' : 'none'}}>
+                    <polyline points="23 4 23 10 17 10"/>
+                    <polyline points="1 20 1 14 7 14"/>
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                  </svg>
+                </button>
+                <button onClick={()=>setAddOpen(true)} style={{
+                  width:52,height:52,borderRadius:16,
+                  background:'oklch(0.72 0.22 145)',color:'#2A1F3D',
+                  border:'3px solid #2A1F3D',cursor:'pointer',
+                  fontSize:30,fontWeight:900,lineHeight:1,
+                  boxShadow:'4px 4px 0 #2A1F3D',transform:'rotate(3deg)',
+                  display:'flex',alignItems:'center',justifyContent:'center',
+                }}>+</button>
+              </div>
             </div>
           </div>
 
@@ -957,7 +997,7 @@
             ) : (
               <div style={{
                 display:'grid',
-                gridTemplateColumns:'repeat(3,1fr)',
+                gridTemplateColumns:'repeat(3, minmax(0, 1fr))',
                 gap:'clamp(10px,3vw,16px)',
               }}>
                 {filtered.map(s => (
