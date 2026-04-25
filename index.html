@@ -88,38 +88,78 @@
     ];
 
     // ─── Audio engine ────────────────────────────────────────────────────────────
+    // For real recordings we use HTMLAudioElement — it routes through the iOS
+    // *media* volume bus (more permissive than Web Audio) and survives the
+    // silent switch in many cases. Web Audio is kept only for the synthetic
+    // fallback used by seed sounds without a stored blob.
+    window.__audioErrors = window.__audioErrors || [];
+    function reportAudioError(label, err) {
+      const msg = `${label}: ${err && err.message || err}`;
+      console.error('audio error:', msg);
+      window.__audioErrors.push({t: Date.now(), msg});
+      window.dispatchEvent(new CustomEvent('audio-error', {detail: msg}));
+    }
+
     class AudioEngine {
       constructor() {
-        this._ctx = null; this._buffers = {}; this._source = null;
+        this._ctx = null; this._source = null;
         this._startTime = 0; this._duration = 0;
         this._onProgress = null; this._raf = null; this._onEnd = null;
+        this._el = null; // shared HTMLAudioElement for blob playback
+        this._buffers = {}; // decoded webaudio buffers (used for synthesis)
+        this._urls = {}; // cached object URLs / remote URLs per id
+        this._currentEl = null;
       }
       _getCtx() {
         if (!this._ctx) this._ctx = new (window.AudioContext || window.webkitAudioContext)();
         if (this._ctx.state === 'suspended') this._ctx.resume();
         return this._ctx;
       }
+      _getEl() {
+        if (!this._el) {
+          const a = new Audio();
+          a.preload = 'auto';
+          a.crossOrigin = 'anonymous';
+          a.playsInline = true;
+          this._el = a;
+        }
+        return this._el;
+      }
       // Must be called inside a touchstart/click handler the first time.
-      // iOS Safari only unlocks Web Audio if a buffer source is started during a gesture.
       unlock() {
-        const ctx = this._getCtx();
         if (this._unlocked) return;
+        // Unlock Web Audio (silent buffer)
         try {
+          const ctx = this._getCtx();
           const buf = ctx.createBuffer(1, 1, 22050);
           const src = ctx.createBufferSource();
           src.buffer = buf;
           src.connect(ctx.destination);
           src.start(0);
-          this._unlocked = true;
         } catch(_){}
+        // Unlock HTMLAudioElement (load + play+pause inside gesture)
+        try {
+          const a = this._getEl();
+          a.muted = true;
+          const p = a.play();
+          if (p && p.then) p.then(() => { a.pause(); a.muted = false; }).catch(()=>{ a.muted = false; });
+          else { a.pause(); a.muted = false; }
+        } catch(_){}
+        this._unlocked = true;
       }
+      registerURL(id, url) { this._urls[id] = url; }
       async loadURL(id, url) {
-        const ctx = this._getCtx();
-        const res = await fetch(url);
-        const ab  = await res.arrayBuffer();
-        const buf = await ctx.decodeAudioData(ab);
-        this._buffers[id] = buf;
-        return buf.duration;
+        // Probe duration via a separate audio element so the cached element
+        // isn't disturbed. We don't need to decode for playback.
+        this._urls[id] = url;
+        return await new Promise((resolve) => {
+          const probe = new Audio();
+          probe.preload = 'metadata';
+          probe.src = url;
+          const done = () => resolve(isFinite(probe.duration) ? probe.duration : 1.5);
+          probe.addEventListener('loadedmetadata', done, {once:true});
+          probe.addEventListener('error', () => resolve(1.5), {once:true});
+        });
       }
       _makeSynthetic(duration) {
         const ctx = this._getCtx();
@@ -136,18 +176,60 @@
       }
       async play(id, duration, loop, onProgress, onEnd) {
         this.stop();
-        const ctx = this._getCtx();
-        if (ctx.state === 'suspended') { try { await ctx.resume(); } catch(_){} }
-        const buf = this._buffers[id] || this._makeSynthetic(duration);
-        const src = ctx.createBufferSource();
-        src.buffer = buf;
-        src.loop   = loop;
-        src.connect(ctx.destination);
-        src.start(0);
-        if (!loop) src.onended = () => { this._source = null; onEnd && onEnd(); };
-        this._source = src; this._startTime = ctx.currentTime;
-        this._duration = buf.duration; this._onProgress = onProgress;
-        this._tick();
+        const url = this._urls[id];
+        if (url) {
+          // HTMLAudioElement path
+          const a = this._getEl();
+          a.loop = !!loop;
+          if (a.src !== url) a.src = url;
+          a.currentTime = 0;
+          this._currentEl = a;
+          this._duration = duration; this._onProgress = onProgress;
+          const onEndedHandler = () => {
+            if (this._currentEl !== a) return;
+            this._currentEl = null;
+            cancelAnimationFrame(this._raf);
+            this._onProgress && this._onProgress(0);
+            onEnd && onEnd();
+          };
+          a.onended = loop ? null : onEndedHandler;
+          try {
+            await a.play();
+          } catch(e) {
+            reportAudioError('audio.play() rejected', e);
+            this._currentEl = null;
+            onEnd && onEnd();
+            return;
+          }
+          // Progress tick
+          const tick = () => {
+            if (this._currentEl !== a) return;
+            const dur = a.duration || duration || 1;
+            const p = loop ? ((a.currentTime % dur) / dur) : Math.min(a.currentTime / dur, 1);
+            this._onProgress && this._onProgress(p);
+            if (p < 1 || loop) this._raf = requestAnimationFrame(tick);
+          };
+          this._raf = requestAnimationFrame(tick);
+          return;
+        }
+        // Synthetic Web Audio path (seed sounds with no blob)
+        try {
+          const ctx = this._getCtx();
+          if (ctx.state === 'suspended') { try { await ctx.resume(); } catch(_){} }
+          const buf = this._buffers[id] || this._makeSynthetic(duration);
+          const src = ctx.createBufferSource();
+          src.buffer = buf;
+          src.loop   = loop;
+          src.connect(ctx.destination);
+          src.start(0);
+          if (!loop) src.onended = () => { this._source = null; onEnd && onEnd(); };
+          this._source = src; this._startTime = ctx.currentTime;
+          this._duration = buf.duration; this._onProgress = onProgress;
+          this._tick();
+        } catch(e) {
+          reportAudioError('webaudio play failed', e);
+          onEnd && onEnd();
+        }
       }
       _tick() {
         if (!this._source) return;
@@ -159,6 +241,7 @@
       }
       stop() {
         if (this._source) { try { this._source.stop(); } catch(_){} this._source = null; }
+        if (this._currentEl) { try { this._currentEl.pause(); } catch(_){} this._currentEl = null; }
         if (this._raf)    { cancelAnimationFrame(this._raf); this._raf = null; }
         this._onProgress && this._onProgress(0);
       }
@@ -334,6 +417,8 @@
             return null;
           }
           has_blob = true;
+          // Always register the public URL so the HTMLAudioElement playback path works
+          engine.registerURL(id, `${SUPABASE_URL}/storage/v1/object/public/audio/${id}`);
           if (!audioLoaded[id]) {
             const url = `${SUPABASE_URL}/storage/v1/object/public/audio/${id}`;
             dur = await engine.loadURL(id, url).catch(() => 1.5);
@@ -740,6 +825,14 @@
       const activeSound = sounds.find(s => s.id === playingId);
       const tilts = useTilts(sounds);
 
+      // Visible diagnostic toast for audio errors (so we can debug iOS without devtools)
+      const [audioErr, setAudioErr] = React.useState(null);
+      React.useEffect(() => {
+        const onErr = (e) => { setAudioErr(e.detail); setTimeout(() => setAudioErr(null), 8000); };
+        window.addEventListener('audio-error', onErr);
+        return () => window.removeEventListener('audio-error', onErr);
+      }, []);
+
       if (appLoading) return (
         <div style={{
           height:'100%', display:'flex', flexDirection:'column',
@@ -774,6 +867,18 @@
             backgroundImage:'radial-gradient(#2A1F3D 1.2px, transparent 1.2px)',
             backgroundSize:'20px 20px', opacity:0.08,
           }} />
+
+          {/* Audio error toast */}
+          {audioErr && (
+            <div style={{
+              position:'fixed', top:'env(safe-area-inset-top)', left:14, right:14, zIndex:1000,
+              background:'oklch(0.62 0.22 25)', color:'#fff',
+              padding:'12px 14px', borderRadius:14,
+              border:'2.5px solid #2A1F3D', boxShadow:'4px 4px 0 #2A1F3D',
+              fontSize:13, fontWeight:700, lineHeight:1.3,
+              animation:'popIn .25s ease',
+            }}>🔊 {audioErr}</div>
+          )}
 
           {/* Real-time sync dot */}
           {syncDot && (
