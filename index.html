@@ -99,7 +99,20 @@
         if (this._ctx.state === 'suspended') this._ctx.resume();
         return this._ctx;
       }
-      unlock() { this._getCtx(); }
+      // Must be called inside a touchstart/click handler the first time.
+      // iOS Safari only unlocks Web Audio if a buffer source is started during a gesture.
+      unlock() {
+        const ctx = this._getCtx();
+        if (this._unlocked) return;
+        try {
+          const buf = ctx.createBuffer(1, 1, 22050);
+          const src = ctx.createBufferSource();
+          src.buffer = buf;
+          src.connect(ctx.destination);
+          src.start(0);
+          this._unlocked = true;
+        } catch(_){}
+      }
       async loadURL(id, url) {
         const ctx = this._getCtx();
         const res = await fetch(url);
@@ -151,6 +164,57 @@
       }
     }
     const engine = new AudioEngine();
+
+    // Unlock audio on the very first touch/click anywhere — required for iOS Safari.
+    (function installAudioUnlock() {
+      const unlock = () => {
+        engine.unlock();
+        window.removeEventListener('touchstart', unlock, true);
+        window.removeEventListener('touchend',   unlock, true);
+        window.removeEventListener('mousedown',  unlock, true);
+        window.removeEventListener('click',      unlock, true);
+      };
+      window.addEventListener('touchstart', unlock, {capture:true, passive:true});
+      window.addEventListener('touchend',   unlock, {capture:true, passive:true});
+      window.addEventListener('mousedown',  unlock, true);
+      window.addEventListener('click',      unlock, true);
+    })();
+
+    // Encode an AudioBuffer as a 16-bit PCM WAV blob (universally decodable).
+    function audioBufferToWav(buffer) {
+      const numCh = buffer.numberOfChannels;
+      const sr = buffer.sampleRate;
+      const len = buffer.length;
+      const interleaved = new Float32Array(len * numCh);
+      for (let ch = 0; ch < numCh; ch++) {
+        const data = buffer.getChannelData(ch);
+        for (let i = 0; i < len; i++) interleaved[i * numCh + ch] = data[i];
+      }
+      const dataLen = interleaved.length * 2;
+      const ab = new ArrayBuffer(44 + dataLen);
+      const view = new DataView(ab);
+      const writeStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+      writeStr(0, 'RIFF');
+      view.setUint32(4, 36 + dataLen, true);
+      writeStr(8, 'WAVE');
+      writeStr(12, 'fmt ');
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, numCh, true);
+      view.setUint32(24, sr, true);
+      view.setUint32(28, sr * numCh * 2, true);
+      view.setUint16(32, numCh * 2, true);
+      view.setUint16(34, 16, true);
+      writeStr(36, 'data');
+      view.setUint32(40, dataLen, true);
+      let off = 44;
+      for (let i = 0; i < interleaved.length; i++) {
+        const s = Math.max(-1, Math.min(1, interleaved[i]));
+        view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+        off += 2;
+      }
+      return new Blob([ab], {type: 'audio/wav'});
+    }
 
     // ─── Audio cache + loader ───────────────────────────────────────────────────
     const audioLoaded = {};
@@ -247,17 +311,34 @@
         const id = 'u' + Date.now();
         let dur = 1.5, has_blob = false;
         if (partial.blob) {
+          // Transcode to WAV so any device (including iOS Safari) can decode the file.
+          let uploadBlob = partial.blob;
+          let contentType = partial.blob.type || 'application/octet-stream';
+          try {
+            const ab = await partial.blob.arrayBuffer();
+            const ctx = engine._getCtx();
+            const decoded = await ctx.decodeAudioData(ab.slice(0));
+            uploadBlob = audioBufferToWav(decoded);
+            contentType = 'audio/wav';
+            engine._buffers[id] = decoded;
+            dur = decoded.duration;
+            audioLoaded[id] = true;
+          } catch(e) {
+            console.warn('transcode failed, uploading original:', e && e.message);
+          }
           const {error: upErr} = await db.storage.from('audio')
-            .upload(id, partial.blob, {contentType: partial.blob.type, upsert: false});
+            .upload(id, uploadBlob, {contentType, upsert: false});
           if (upErr) {
             console.error('upload failed:', JSON.stringify(upErr));
             alert('Upload failed: ' + (upErr.message || 'unknown error'));
             return null;
           }
           has_blob = true;
-          const url = `${SUPABASE_URL}/storage/v1/object/public/audio/${id}`;
-          dur = await engine.loadURL(id, url).catch(() => 1.5);
-          audioLoaded[id] = true;
+          if (!audioLoaded[id]) {
+            const url = `${SUPABASE_URL}/storage/v1/object/public/audio/${id}`;
+            dur = await engine.loadURL(id, url).catch(() => 1.5);
+            audioLoaded[id] = true;
+          }
         }
         const newSound = {
           id, name: partial.name || 'New sound',
