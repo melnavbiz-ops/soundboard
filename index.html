@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Soundboard</title>
+  <title>Sojo Club Soundboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="theme-color" content="#FFF1E6">
@@ -33,6 +33,10 @@
     @keyframes pulse   { 0%,100%{opacity:1} 50%{opacity:0.4} }
     @keyframes spin    { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
     @keyframes popIn   { 0%{transform:scale(0.8);opacity:0} 100%{transform:scale(1);opacity:1} }
+    @keyframes editJiggle {
+      0%,100% { transform: rotate(-1.2deg); }
+      50%     { transform: rotate(1.2deg); }
+    }
     ::-webkit-scrollbar { display:none; }
     * { scrollbar-width:none; }
     input, button { font-family:inherit; }
@@ -86,6 +90,8 @@
       {id:'reax', name:'Reactions'},
       {id:'retro',name:'Retro'},
     ];
+    const BUILTIN_IDS = new Set(CATEGORIES.map(c => c.id));
+    const titleCase = (s) => s ? s[0].toUpperCase() + s.slice(1) : s;
 
     // ─── Audio engine ────────────────────────────────────────────────────────────
     // For real recordings we use HTMLAudioElement — it routes through the iOS
@@ -319,6 +325,14 @@
       const [addOpen,    setAddOpen]    = React.useState(false);
       const [appLoading, setAppLoading] = React.useState(true);
       const [syncDot,    setSyncDot]    = React.useState(false);
+      const [editMode,   setEditMode]   = React.useState(false);
+      const [customCategories, setCustomCategories] = React.useState(() => {
+        try { return JSON.parse(localStorage.getItem('sb_customCategories') || '[]'); }
+        catch(_) { return []; }
+      });
+      React.useEffect(() => {
+        try { localStorage.setItem('sb_customCategories', JSON.stringify(customCategories)); } catch(_){}
+      }, [customCategories]);
       const loopRef    = React.useRef(loop);
       loopRef.current  = loop;
 
@@ -352,6 +366,32 @@
           .subscribe();
 
         return () => { cancelled = true; db.removeChannel(channel); };
+      }, []);
+
+      const allCategories = React.useMemo(() => {
+        const out = [...CATEGORIES];
+        const seen = new Set(out.map(c => c.id));
+        customCategories.forEach(c => {
+          if (!seen.has(c.id)) { out.push(c); seen.add(c.id); }
+        });
+        sounds.forEach(s => {
+          if (s.category && !seen.has(s.category)) {
+            out.push({id: s.category, name: titleCase(s.category)});
+            seen.add(s.category);
+          }
+        });
+        return out;
+      }, [sounds, customCategories]);
+
+      const addCategory = React.useCallback((cat) => {
+        if (!cat || !cat.id) return;
+        if (BUILTIN_IDS.has(cat.id)) return;
+        setCustomCategories(cs => cs.find(c => c.id === cat.id) ? cs : [...cs, cat]);
+      }, []);
+
+      const updateSoundCategory = React.useCallback(async (id, newCat) => {
+        setSounds(ss => ss.map(s => s.id === id ? {...s, category: newCat} : s));
+        await db.from('sounds').update({category: newCat}).eq('id', id);
       }, []);
 
       const filtered = React.useMemo(() => {
@@ -480,15 +520,28 @@
         loop, setLoop, category, setCategory,
         addOpen, setAddOpen, play, stop, toggleFav, addSound, deleteSound,
         appLoading, syncDot, refresh, refreshing,
+        editMode, setEditMode,
+        allCategories, addCategory, updateSoundCategory,
       };
     }
 
     // ─── ClayPad ────────────────────────────────────────────────────────────────
-    function ClayPad({sound, tilt, active, loading, progress, onTap, onToggleFav, onDelete}) {
-      const [pressed,   setPressed]   = React.useState(false);
-      const [confetti,  setConfetti]  = React.useState([]);
-      const [showMenu,  setShowMenu]  = React.useState(false);
-      const longTimer = React.useRef(null);
+    function ClayPad({sound, tilt, active, loading, progress, editMode, categories, onTap, onToggleFav, onDelete, onMove}) {
+      const [pressed,    setPressed]    = React.useState(false);
+      const [confetti,   setConfetti]   = React.useState([]);
+      const [showMenu,   setShowMenu]   = React.useState(false);
+      const [showMove,   setShowMove]   = React.useState(false);
+      const [confirmDel, setConfirmDel] = React.useState(false);
+      const longTimer  = React.useRef(null);
+      const confirmTmr = React.useRef(null);
+
+      React.useEffect(() => () => {
+        clearTimeout(longTimer.current);
+        clearTimeout(confirmTmr.current);
+      }, []);
+      React.useEffect(() => {
+        if (!editMode) { setConfirmDel(false); clearTimeout(confirmTmr.current); }
+      }, [editMode]);
 
       const triggerConfetti = () => {
         const bits = Array.from({length:8}).map((_,i) => ({
@@ -504,46 +557,97 @@
 
       const onStart = () => {
         setPressed(true);
-        longTimer.current = setTimeout(() => setShowMenu(true), 500);
+        if (!editMode) longTimer.current = setTimeout(() => setShowMenu(true), 500);
       };
       const onEnd = () => {
         setPressed(false);
         clearTimeout(longTimer.current);
+        if (editMode) return; // taps in edit mode shouldn't play
         if (!showMenu) { triggerConfetti(); onTap(); }
       };
       const onLeave = () => { setPressed(false); clearTimeout(longTimer.current); };
 
+      const handleDeleteTap = (e) => {
+        e.stopPropagation(); e.preventDefault();
+        if (!confirmDel) {
+          setConfirmDel(true);
+          clearTimeout(confirmTmr.current);
+          confirmTmr.current = setTimeout(() => setConfirmDel(false), 2500);
+        } else {
+          clearTimeout(confirmTmr.current);
+          setConfirmDel(false);
+          onDelete();
+        }
+      };
+
       const base = padColor(sound.color, 0.82, 0.18);
       const deep = padColorDeep(sound.color, 0.48, 0.15);
 
+      const moveTargets = (categories || []).filter(c => c.id !== 'all' && c.id !== 'fav' && c.id !== sound.category);
+
       return (
-        <div style={{position:'relative', transform:`rotate(${tilt}deg)`}}>
-          {showMenu && (
-            <div onClick={e=>{e.stopPropagation();setShowMenu(false);}}
+        <div style={{
+          position:'relative',
+          transform:`rotate(${tilt}deg)`,
+          animation: editMode ? `editJiggle ${0.35 + (Math.abs(tilt)%0.2)}s ease-in-out infinite` : 'none',
+        }}>
+          {(showMenu || showMove) && (
+            <div onClick={e=>{e.stopPropagation();setShowMenu(false);setShowMove(false);}}
               style={{position:'fixed',inset:0,zIndex:50}} />
           )}
-          {showMenu && (
+          {showMenu && !showMove && (
             <div style={{
               position:'absolute', top:'50%', left:'50%',
               transform:'translate(-50%,-50%)',
               zIndex:51, background:'#2A1F3D', borderRadius:16,
               border:'3px solid #FFF1E6',
               boxShadow:'4px 4px 0 oklch(0.72 0.22 30)',
-              overflow:'hidden', minWidth:140,
+              overflow:'hidden', minWidth:160,
               animation:'popIn .18s ease',
             }}>
-              <button onClick={()=>{onToggleFav();setShowMenu(false);}} style={{
+              <button onClick={(e)=>{e.stopPropagation();onToggleFav();setShowMenu(false);}} style={{
                 display:'block',width:'100%',padding:'13px 18px',
                 fontSize:14,fontWeight:900,textAlign:'left',
                 background:'none',border:'none',color:'#FFF1E6',cursor:'pointer',
                 borderBottom:'1.5px solid rgba(255,241,230,0.15)',
               }}>{sound.fav ? '☆ Unfavorite' : '★ Favorite'}</button>
-              <button onClick={()=>{onDelete();setShowMenu(false);}} style={{
+              <button onClick={(e)=>{e.stopPropagation();setShowMove(true);}} style={{
+                display:'block',width:'100%',padding:'13px 18px',
+                fontSize:14,fontWeight:900,textAlign:'left',
+                background:'none',border:'none',color:'#FFF1E6',cursor:'pointer',
+                borderBottom:'1.5px solid rgba(255,241,230,0.15)',
+              }}>📂 Move to…</button>
+              <button onClick={(e)=>{e.stopPropagation();onDelete();setShowMenu(false);}} style={{
                 display:'block',width:'100%',padding:'13px 18px',
                 fontSize:14,fontWeight:900,textAlign:'left',
                 background:'none',border:'none',
                 color:'oklch(0.75 0.22 25)',cursor:'pointer',
               }}>🗑 Delete</button>
+            </div>
+          )}
+          {showMove && (
+            <div style={{
+              position:'absolute', top:'50%', left:'50%',
+              transform:'translate(-50%,-50%)',
+              zIndex:52, background:'#2A1F3D', borderRadius:16,
+              border:'3px solid #FFF1E6',
+              boxShadow:'4px 4px 0 oklch(0.72 0.22 30)',
+              overflow:'hidden', minWidth:180, maxHeight:240, overflowY:'auto',
+              animation:'popIn .18s ease',
+            }}>
+              <div style={{padding:'10px 16px',fontSize:11,fontWeight:900,color:'#FFF1E6',opacity:0.6,letterSpacing:1.2,textTransform:'uppercase',borderBottom:'1.5px solid rgba(255,241,230,0.15)'}}>
+                Move to
+              </div>
+              {moveTargets.length === 0 ? (
+                <div style={{padding:'13px 18px',fontSize:13,color:'#FFF1E6',opacity:0.6}}>No other categories</div>
+              ) : moveTargets.map(c => (
+                <button key={c.id} onClick={(e)=>{e.stopPropagation();onMove&&onMove(c.id);setShowMove(false);setShowMenu(false);}} style={{
+                  display:'block',width:'100%',padding:'12px 18px',
+                  fontSize:14,fontWeight:900,textAlign:'left',
+                  background:'none',border:'none',color:'#FFF1E6',cursor:'pointer',
+                  borderBottom:'1.5px solid rgba(255,241,230,0.1)',
+                }}>{c.name}</button>
+              ))}
             </div>
           )}
 
@@ -578,6 +682,30 @@
                 fontSize:12, fontWeight:900,
                 boxShadow:'2px 2px 0 #2A1F3D', transform:'rotate(15deg)',
               }}>★</div>
+            )}
+            {editMode && (
+              <button
+                onMouseDown={e=>e.stopPropagation()}
+                onTouchStart={e=>{e.stopPropagation();}}
+                onTouchEnd={handleDeleteTap}
+                onClick={handleDeleteTap}
+                aria-label={confirmDel ? 'Confirm delete' : 'Delete'}
+                style={{
+                  position:'absolute', top:-10, left:-10, zIndex:5,
+                  minWidth: confirmDel ? 56 : 28, height:28,
+                  padding: confirmDel ? '0 8px' : 0,
+                  borderRadius: confirmDel ? 14 : '50%',
+                  background:'oklch(0.62 0.22 25)', color:'#FFF1E6',
+                  border:'2.5px solid #2A1F3D',
+                  boxShadow:'2px 2px 0 #2A1F3D',
+                  fontSize: confirmDel ? 11 : 16, fontWeight:900,
+                  cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center',
+                  transform:'rotate(-8deg)',
+                  letterSpacing: confirmDel ? 0.5 : 0,
+                  textTransform:'uppercase',
+                }}>
+                {confirmDel ? 'Sure?' : '✕'}
+              </button>
             )}
 
             <div style={{
@@ -620,9 +748,19 @@
     }
 
     // ─── AddSoundModal ──────────────────────────────────────────────────────────
-    const EMOJI_OPTS = ['🔊','🎵','📯','🥁','💥','👏','😂','🎺','🎻','🎸','🔔','⚡','💨','😱','😐','😎','🦗','💿','🎉','🔥'];
+    const EMOJI_GROUPS = {
+      'Faces': ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','😉','😍','🥰','😘','😎','🤩','🥳','😏','😒','😞','😔','😕','🙁','😣','😖','😫','😩','🥺','😢','😭','😤','😠','😡','🤬','🤯','😱','😨','😰','🤔','🤨','😐','😑','😬','🙄','😴','🤤','🥱','🤡','👻','💀'],
+      'Reactions': ['👏','🙌','🤝','👍','👎','👌','✌️','🤟','🤘','🙏','👋','🤙','💪','🫡','🎉','🎊','🔥','💯','⭐','🌟','✨','💥','💢','💫','❌','✅','⚠️','🚨','❤️','💔','💖','😈','🤖'],
+      'Music': ['🎵','🎶','🎼','🎤','🎧','🎷','🎸','🎺','🎻','🥁','🪘','🪗','📯','🎹','🪇','📻','🔊','🔇','📢','📣','📀','💿'],
+      'Animals': ['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🙈','🙉','🙊','🐔','🐧','🐦','🦅','🦉','🐺','🐗','🐴','🦄','🐝','🦋','🐌','🐞','🐢','🐍','🦖','🐙','🦀','🐠','🐬','🐳','🦈'],
+      'Food': ['🍎','🍌','🍇','🍉','🍓','🥭','🍍','🥑','🌶️','🍕','🍔','🍟','🌭','🥪','🌮','🌯','🍿','🍩','🍪','🍰','🎂','🍫','🍬','🍭','🍦','☕','🍵','🍺','🍻','🥂','🍷','🍸','🥤'],
+      'Activity': ['⚽','🏀','🏈','⚾','🎾','🏐','🎱','🏓','🥊','🏆','🥇','🥈','🥉','🎯','🎳','🎮','🕹️','🎲','🎭','🎨','🎬','🚀','💼','🏁'],
+      'Objects': ['💎','🔔','⚡','💡','🔦','📞','📱','💻','⌚','🎁','🎈','📺','📷','🎥','⏰','🛎️','💣','🧨','🪅','💩','💨','🩸','🦴'],
+      'Symbols': ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','💯','♻️','☮️','☯️','✝️','☪️','🕉️','🔯','✡️','☢️','☣️','🆗','🆒','🆕','🆙','♠️','♥️','♦️','♣️'],
+    };
+    const EMOJI_GROUP_NAMES = Object.keys(EMOJI_GROUPS);
 
-    function AddSoundModal({open, onClose, onAdd}) {
+    function AddSoundModal({open, onClose, onAdd, categories, onAddCategory}) {
       const [name,       setName]       = React.useState('');
       const [emoji,      setEmoji]      = React.useState('🔊');
       const [color,      setColor]      = React.useState(0);
@@ -632,30 +770,55 @@
       const [recTime,    setRecTime]    = React.useState(0);
       const [recBlob,    setRecBlob]    = React.useState(null);
       const [uploading,  setUploading]  = React.useState(false);
-      const mediaRef = React.useRef(null);
-      const chunksRef = React.useRef([]);
-      const rafRef   = React.useRef(null);
-      const startRef = React.useRef(0);
+      const [emojiTab,   setEmojiTab]   = React.useState('Faces');
+      const [previewing, setPreviewing] = React.useState(false);
+      const [newCatOpen, setNewCatOpen] = React.useState(false);
+      const [newCatName, setNewCatName] = React.useState('');
+      const mediaRef    = React.useRef(null);
+      const chunksRef   = React.useRef([]);
+      const rafRef      = React.useRef(null);
+      const startRef    = React.useRef(0);
+      const previewRef  = React.useRef(null);
+      const previewURL  = React.useRef(null);
+
+      const cleanupPreview = () => {
+        if (previewRef.current) { try { previewRef.current.pause(); } catch(_){} previewRef.current = null; }
+        if (previewURL.current) { try { URL.revokeObjectURL(previewURL.current); } catch(_){} previewURL.current = null; }
+        setPreviewing(false);
+      };
+      const cleanupMic = () => {
+        if (mediaRef.current) {
+          try { mediaRef.current.stream && mediaRef.current.stream.getTracks().forEach(t=>t.stop()); } catch(_){}
+          try { mediaRef.current.stop(); } catch(_){}
+          mediaRef.current = null;
+        }
+        if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+        setRecording(false);
+      };
 
       React.useEffect(() => {
         if (!open) {
           setName(''); setEmoji('🔊'); setColor(0); setCategory('meme');
-          setFile(null); setRecording(false); setRecTime(0); setRecBlob(null); setUploading(false);
-          if (mediaRef.current) { try{mediaRef.current.stop();}catch(_){} mediaRef.current=null; }
+          setFile(null); setRecTime(0); setRecBlob(null); setUploading(false);
+          setEmojiTab('Faces'); setNewCatOpen(false); setNewCatName('');
+          cleanupMic();
+          cleanupPreview();
         }
       }, [open]);
 
       const startRec = async () => {
         try {
+          cleanupPreview();
           const stream = await navigator.mediaDevices.getUserMedia({audio:true});
           chunksRef.current = [];
           const mr = new MediaRecorder(stream);
+          mr.stream = stream; // so cleanupMic can release tracks
           mr.ondataavailable = e => { if (e.data.size>0) chunksRef.current.push(e.data); };
           mr.onstop = () => {
             const blob = new Blob(chunksRef.current, {type:'audio/webm'});
             setRecBlob(blob); setFile('mic-recording.webm');
-            stream.getTracks().forEach(t=>t.stop());
-            cancelAnimationFrame(rafRef.current);
+            try { stream.getTracks().forEach(t=>t.stop()); } catch(_){}
+            if (rafRef.current) cancelAnimationFrame(rafRef.current);
           };
           mr.start(); mediaRef.current = mr;
           setRecording(true); setRecBlob(null);
@@ -666,19 +829,58 @@
       };
 
       const stopRec = () => {
-        if (mediaRef.current) { mediaRef.current.stop(); mediaRef.current=null; }
+        if (mediaRef.current) { try{ mediaRef.current.stop(); }catch(_){} mediaRef.current=null; }
         setRecording(false);
       };
 
       const handleFile = e => {
         const f = e.target.files[0];
         if (!f) return;
+        cleanupPreview();
         setFile(f.name); setRecBlob(f);
         if (!name) setName(f.name.replace(/\.[^.]+$/,'').replace(/[-_]/g,' ').slice(0,24));
       };
 
+      const togglePreview = () => {
+        if (!recBlob) return;
+        if (previewing) { cleanupPreview(); return; }
+        try {
+          const url = URL.createObjectURL(recBlob);
+          previewURL.current = url;
+          const a = new Audio(url);
+          a.playsInline = true;
+          previewRef.current = a;
+          a.onended = () => cleanupPreview();
+          a.onerror = () => cleanupPreview();
+          a.play().then(() => setPreviewing(true)).catch(() => cleanupPreview());
+        } catch(_) { cleanupPreview(); }
+      };
+
+      const handleAddCategory = () => {
+        const id = newCatName.trim().toLowerCase().replace(/\s+/g,'-').replace(/[^a-z0-9-]/g,'').slice(0, 20);
+        const display = newCatName.trim().slice(0, 24);
+        if (!id || !display) return;
+        if (categories.find(c => c.id === id)) {
+          setCategory(id); setNewCatOpen(false); setNewCatName(''); return;
+        }
+        onAddCategory({id, name: display});
+        setCategory(id);
+        setNewCatOpen(false);
+        setNewCatName('');
+      };
+
+      // Guarded close: stops mic + preview, blocked during upload
+      const safeClose = () => {
+        if (uploading) return;
+        cleanupMic();
+        cleanupPreview();
+        onClose();
+      };
+
       const handleSubmit = async () => {
         if (!name.trim() || uploading) return;
+        cleanupPreview();
+        if (recording) { try{ mediaRef.current && mediaRef.current.stop(); }catch(_){} setRecording(false); }
         setUploading(true);
         await onAdd({name:name.trim(), emoji, color, category, blob:recBlob});
         onClose();
@@ -687,7 +889,7 @@
       if (!open) return null;
 
       return (
-        <div onClick={onClose} style={{
+        <div onClick={safeClose} style={{
           position:'fixed',inset:0,zIndex:200,
           background:'rgba(40,30,60,0.55)',
           display:'flex',alignItems:'flex-end',
@@ -698,16 +900,35 @@
             background:'#FFF1E6',
             border:'3px solid #2A1F3D',
             borderTopLeftRadius:32, borderTopRightRadius:32,
-            padding:'22px 24px max(40px,env(safe-area-inset-bottom))',
+            padding:'14px 24px max(40px,env(safe-area-inset-bottom))',
             boxShadow:'8px 8px 0 #2A1F3D',
             animation:'slideUp .3s cubic-bezier(.2,.9,.3,1.1)',
+            position:'relative',
           }}>
-            <div style={{width:40,height:5,borderRadius:3,background:'#2A1F3D',opacity:0.2,margin:'0 auto 18px'}} />
-            <h2 style={{fontSize:26,fontWeight:900,color:'#2A1F3D',letterSpacing:-0.5}}>Add a sound</h2>
-            <p style={{marginTop:4,marginBottom:22,fontSize:14,color:'#2A1F3D',opacity:0.6}}>Upload a file or record from your mic.</p>
+            {/* Back button (top-left) */}
+            <button onClick={safeClose} disabled={uploading} aria-label="Back" title="Back"
+              style={{
+                position:'absolute', top:14, left:14,
+                width:38, height:38, borderRadius:12,
+                background: uploading ? 'rgba(42,31,61,0.15)' : '#FFF1E6',
+                border:'2.5px solid #2A1F3D',
+                cursor: uploading ? 'not-allowed' : 'pointer',
+                boxShadow: uploading ? 'none' : '3px 3px 0 #2A1F3D',
+                display:'flex', alignItems:'center', justifyContent:'center',
+                padding:0,
+                opacity: uploading ? 0.5 : 1,
+              }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2A1F3D" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>
+              </svg>
+            </button>
+
+            <div style={{width:40,height:5,borderRadius:3,background:'#2A1F3D',opacity:0.2,margin:'0 auto 14px'}} />
+            <h2 style={{fontSize:26,fontWeight:900,color:'#2A1F3D',letterSpacing:-0.5,textAlign:'center'}}>Add a sound</h2>
+            <p style={{marginTop:4,marginBottom:22,fontSize:14,color:'#2A1F3D',opacity:0.6,textAlign:'center'}}>Upload a file or record from your mic.</p>
 
             {/* Source */}
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:18}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
               <label style={{
                 display:'flex',flexDirection:'column',alignItems:'center',gap:6,
                 padding:'18px 10px',borderRadius:16,cursor:'pointer',
@@ -744,6 +965,23 @@
               </button>
             </div>
 
+            {/* Preview */}
+            {recBlob && !recording && (
+              <button onClick={togglePreview} style={{
+                width:'100%', marginBottom:18,
+                padding:'10px 14px', borderRadius:12,
+                fontSize:13, fontWeight:900,
+                background: previewing ? 'oklch(0.72 0.22 30)' : 'rgba(42,31,61,0.06)',
+                color: previewing ? '#fff' : '#2A1F3D',
+                border:'2px solid #2A1F3D',
+                boxShadow:'2px 2px 0 #2A1F3D', cursor:'pointer',
+                display:'flex', alignItems:'center', justifyContent:'center', gap:8,
+              }}>
+                {previewing ? '⏸ Stop preview' : '▶ Preview'}
+              </button>
+            )}
+            {!recBlob && <div style={{height:18}} />}
+
             {/* Name */}
             <label style={{fontSize:11,textTransform:'uppercase',letterSpacing:1.2,fontWeight:900,color:'#2A1F3D',opacity:0.5}}>Name</label>
             <input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Epic Fail" maxLength={24}
@@ -756,8 +994,8 @@
 
             {/* Category */}
             <label style={{fontSize:11,textTransform:'uppercase',letterSpacing:1.2,fontWeight:900,color:'#2A1F3D',opacity:0.5}}>Category</label>
-            <div style={{display:'flex',gap:6,marginTop:6,marginBottom:18,flexWrap:'wrap'}}>
-              {CATEGORIES.filter(c=>c.id!=='all'&&c.id!=='fav').map(c => (
+            <div style={{display:'flex',gap:6,marginTop:6,marginBottom:newCatOpen?10:18,flexWrap:'wrap'}}>
+              {categories.filter(c=>c.id!=='all'&&c.id!=='fav').map(c => (
                 <button key={c.id} onClick={()=>setCategory(c.id)} style={{
                   padding:'6px 12px',borderRadius:10,cursor:'pointer',
                   fontSize:13,fontWeight:900,
@@ -768,18 +1006,64 @@
                   transition:'all .15s',
                 }}>{c.name}</button>
               ))}
+              <button onClick={()=>setNewCatOpen(v=>!v)} style={{
+                padding:'6px 12px',borderRadius:10,cursor:'pointer',
+                fontSize:13,fontWeight:900,
+                background:'oklch(0.85 0.15 220)', color:'#2A1F3D',
+                border:'2px dashed #2A1F3D',
+                boxShadow:'2px 2px 0 #2A1F3D',
+              }}>+ New</button>
             </div>
+            {newCatOpen && (
+              <div style={{display:'flex',gap:6,marginBottom:18}}>
+                <input value={newCatName} onChange={e=>setNewCatName(e.target.value)}
+                  onKeyDown={e=>{if(e.key==='Enter') handleAddCategory();}}
+                  placeholder="Category name" maxLength={24} autoFocus
+                  style={{
+                    flex:1,padding:'10px 12px',fontSize:14,fontWeight:700,
+                    background:'rgba(42,31,61,0.05)',color:'#2A1F3D',
+                    border:'2.5px solid #2A1F3D',outline:'none',borderRadius:12,
+                  }} />
+                <button onClick={handleAddCategory} disabled={!newCatName.trim()} style={{
+                  padding:'10px 16px',borderRadius:12,fontSize:13,fontWeight:900,
+                  background: newCatName.trim() ? '#2A1F3D' : 'rgba(42,31,61,0.2)',
+                  color: newCatName.trim() ? '#FFF1E6' : '#2A1F3D',
+                  border:'2.5px solid #2A1F3D',cursor: newCatName.trim() ? 'pointer' : 'not-allowed',
+                }}>Add</button>
+              </div>
+            )}
 
             {/* Emoji */}
             <label style={{fontSize:11,textTransform:'uppercase',letterSpacing:1.2,fontWeight:900,color:'#2A1F3D',opacity:0.5}}>Icon</label>
-            <div style={{display:'flex',gap:6,marginTop:6,marginBottom:18,flexWrap:'wrap'}}>
-              {EMOJI_OPTS.map(e => (
+            <div style={{
+              display:'flex',gap:4,marginTop:6,marginBottom:8,
+              overflowX:'auto',WebkitOverflowScrolling:'touch',paddingBottom:4,
+            }}>
+              {EMOJI_GROUP_NAMES.map(g => (
+                <button key={g} onClick={()=>setEmojiTab(g)} style={{
+                  flexShrink:0,padding:'5px 10px',borderRadius:8,fontSize:11,fontWeight:900,
+                  background: emojiTab===g ? '#2A1F3D' : 'transparent',
+                  color: emojiTab===g ? '#FFF1E6' : '#2A1F3D',
+                  border:`2px solid ${emojiTab===g?'#2A1F3D':'rgba(42,31,61,0.2)'}`,
+                  cursor:'pointer',whiteSpace:'nowrap',
+                }}>{g}</button>
+              ))}
+            </div>
+            <div style={{
+              display:'grid',gridTemplateColumns:'repeat(8,1fr)',gap:4,
+              marginBottom:18,maxHeight:180,overflowY:'auto',
+              padding:6,borderRadius:12,
+              background:'rgba(42,31,61,0.04)',
+              border:'2px solid rgba(42,31,61,0.12)',
+            }}>
+              {EMOJI_GROUPS[emojiTab].map(e => (
                 <button key={e} onClick={()=>setEmoji(e)} style={{
-                  width:40,height:40,borderRadius:12,fontSize:20,cursor:'pointer',
-                  background: emoji===e ? 'rgba(42,31,61,0.1)' : 'transparent',
+                  aspectRatio:'1/1',borderRadius:8,fontSize:20,cursor:'pointer',padding:0,
+                  background: emoji===e ? 'rgba(42,31,61,0.15)' : 'transparent',
                   border:`2px solid ${emoji===e?'#2A1F3D':'transparent'}`,
-                  transform: emoji===e ? 'scale(1.15)' : 'scale(1)',
-                  transition:'transform .15s',
+                  transform: emoji===e ? 'scale(1.1)' : 'scale(1)',
+                  transition:'transform .12s',
+                  display:'flex',alignItems:'center',justifyContent:'center',
                 }}>{e}</button>
               ))}
             </div>
@@ -838,6 +1122,8 @@
         loop, setLoop, category, setCategory,
         addOpen, setAddOpen, play, stop, toggleFav, addSound, deleteSound,
         appLoading, syncDot, refresh, refreshing,
+        editMode, setEditMode,
+        allCategories, addCategory, updateSoundCategory,
       } = sb;
       const activeSound = sounds.find(s => s.id === playingId);
       const tilts = useTilts(sounds);
@@ -912,20 +1198,20 @@
           {/* Header */}
           <div style={{padding:'clamp(14px,5vw,20px) clamp(14px,5vw,20px) 0',position:'relative',zIndex:2}}>
             <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:12}}>
-              <div>
+              <div style={{minWidth:0, flex:1}}>
                 <div style={{
                   display:'inline-block',padding:'4px 10px',borderRadius:8,
                   background:'oklch(0.8 0.2 60)',color:'#2A1F3D',
                   fontSize:11,fontWeight:900,letterSpacing:1.5,textTransform:'uppercase',
                   border:'2px solid #2A1F3D',transform:'rotate(-2deg)',
                   boxShadow:'3px 3px 0 #2A1F3D',
-                }}>My Board</div>
+                }}>Sojo Club</div>
                 <h1 style={{
                   margin:'10px 0 0',
-                  fontSize:'clamp(28px,9vw,40px)',
-                  fontWeight:900,letterSpacing:-2,lineHeight:0.95,color:'#2A1F3D',
-                }}>BONK!<br />
-                  <span style={{fontSize:'clamp(14px,4.5vw,18px)',fontWeight:700,letterSpacing:0,color:'oklch(0.55 0.2 340)'}}>
+                  fontSize:'clamp(24px,7.5vw,36px)',
+                  fontWeight:900,letterSpacing:-1.5,lineHeight:0.95,color:'#2A1F3D',
+                }}>SOUNDBOARD<br />
+                  <span style={{fontSize:'clamp(13px,4vw,16px)',fontWeight:700,letterSpacing:0,color:'oklch(0.55 0.2 340)'}}>
                     tap any pad to party
                   </span>
                 </h1>
@@ -952,6 +1238,25 @@
                     <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
                   </svg>
                 </button>
+                <button
+                  onClick={()=>setEditMode(m=>!m)}
+                  aria-label={editMode ? 'Done editing' : 'Edit board'}
+                  title={editMode ? 'Done' : 'Edit'}
+                  style={{
+                    width:52,height:52,borderRadius:16,
+                    background: editMode ? 'oklch(0.72 0.22 30)' : 'oklch(0.85 0.15 85)',
+                    color:'#2A1F3D', border:'3px solid #2A1F3D',
+                    cursor:'pointer', boxShadow:'4px 4px 0 #2A1F3D',
+                    transform:'rotate(2deg)', padding:0,
+                    display:'flex', alignItems:'center', justifyContent:'center',
+                    fontSize: editMode ? 14 : 0, fontWeight:900,
+                  }}>
+                  {editMode ? 'DONE' : (
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2A1F3D" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+                    </svg>
+                  )}
+                </button>
                 <button onClick={()=>setAddOpen(true)} style={{
                   width:52,height:52,borderRadius:16,
                   background:'oklch(0.72 0.22 145)',color:'#2A1F3D',
@@ -970,7 +1275,7 @@
             padding:'clamp(12px,4vw,20px) clamp(14px,5vw,20px) 10px',
             overflowX:'auto',position:'relative',zIndex:2,
           }}>
-            {CATEGORIES.map((c,i) => (
+            {allCategories.map((c,i) => (
               <button key={c.id} onClick={()=>setCategory(c.id)} style={{
                 padding:'7px 14px',borderRadius:12,cursor:'pointer',
                 fontSize:13,fontWeight:900,fontFamily:'inherit',
@@ -1005,9 +1310,12 @@
                     active={playingId===s.id}
                     loading={loadingId===s.id}
                     progress={playingId===s.id ? progress : 0}
+                    editMode={editMode}
+                    categories={allCategories}
                     onTap={()=>play(s.id)}
                     onToggleFav={()=>toggleFav(s.id)}
                     onDelete={()=>deleteSound(s.id)}
+                    onMove={(catId)=>updateSoundCategory(s.id, catId)}
                   />
                 ))}
               </div>
@@ -1075,7 +1383,13 @@
             </button>
           </div>
 
-          <AddSoundModal open={addOpen} onClose={()=>setAddOpen(false)} onAdd={addSound} />
+          <AddSoundModal
+            open={addOpen}
+            onClose={()=>setAddOpen(false)}
+            onAdd={addSound}
+            categories={allCategories}
+            onAddCategory={addCategory}
+          />
         </div>
       );
     }
