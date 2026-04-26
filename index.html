@@ -774,6 +774,7 @@
       const [previewing, setPreviewing] = React.useState(false);
       const [newCatOpen, setNewCatOpen] = React.useState(false);
       const [newCatName, setNewCatName] = React.useState('');
+      const [micError,   setMicError]   = React.useState(null);
       const mediaRef    = React.useRef(null);
       const chunksRef   = React.useRef([]);
       const rafRef      = React.useRef(null);
@@ -801,31 +802,93 @@
           setName(''); setEmoji('🔊'); setColor(0); setCategory('meme');
           setFile(null); setRecTime(0); setRecBlob(null); setUploading(false);
           setEmojiTab('Faces'); setNewCatOpen(false); setNewCatName('');
+          setMicError(null);
           cleanupMic();
           cleanupPreview();
         }
       }, [open]);
 
+      // Pick a MediaRecorder MIME type the current browser actually supports.
+      // iOS Safari supports audio/mp4 (not audio/webm); Chrome/FF prefer webm/opus.
+      const pickRecMime = () => {
+        if (typeof MediaRecorder === 'undefined' || !MediaRecorder.isTypeSupported) return '';
+        const candidates = [
+          'audio/webm;codecs=opus', 'audio/webm',
+          'audio/mp4;codecs=mp4a.40.2', 'audio/mp4',
+          'audio/aac', 'audio/ogg;codecs=opus',
+        ];
+        for (const t of candidates) { if (MediaRecorder.isTypeSupported(t)) return t; }
+        return '';
+      };
+
       const startRec = async () => {
+        setMicError(null);
+        cleanupPreview();
+        // Pre-flight: must be a secure context with a working mediaDevices API
+        if (!window.isSecureContext) {
+          setMicError({title:'Insecure connection', body:'Microphone needs HTTPS. Open the site at https:// and try again.'});
+          return;
+        }
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          setMicError({title:'Mic not available', body:'Your browser blocked the microphone API. On iPhone, try regular Safari (not Private Browsing or in-app browsers like Instagram/Facebook).'});
+          return;
+        }
+        if (typeof MediaRecorder === 'undefined') {
+          setMicError({title:'Recorder not supported', body:'Your browser doesn\'t support MediaRecorder. Update iOS or use Safari/Chrome.'});
+          return;
+        }
+        let stream;
         try {
-          cleanupPreview();
-          const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+          stream = await navigator.mediaDevices.getUserMedia({audio:true});
+        } catch(e) {
+          const name = e && e.name || 'Error';
+          const msg  = e && e.message || String(e);
+          let title = 'Microphone blocked', body = msg;
+          if (name === 'NotAllowedError' || name === 'SecurityError') {
+            title = 'Microphone permission denied';
+            body  = 'Open the "aA" menu in Safari → Website Settings → Microphone → Allow. Then reload this page.';
+          } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+            title = 'No microphone found';
+            body  = 'No mic is available. Check that nothing else (call, voice memo, another tab) is using it.';
+          } else if (name === 'NotReadableError') {
+            title = 'Mic is busy';
+            body  = 'Another app is holding the microphone. Close other tabs/apps using audio and try again.';
+          } else if (name === 'AbortError') {
+            title = 'Permission prompt aborted';
+            body  = 'You may have switched away. Tap Record again.';
+          }
+          setMicError({title, body, raw: name + ': ' + msg});
+          return;
+        }
+        try {
+          const mime = pickRecMime();
           chunksRef.current = [];
-          const mr = new MediaRecorder(stream);
-          mr.stream = stream; // so cleanupMic can release tracks
+          const mr = mime ? new MediaRecorder(stream, {mimeType: mime}) : new MediaRecorder(stream);
+          const usedType = mr.mimeType || mime || 'audio/webm';
+          mr.stream = stream;
           mr.ondataavailable = e => { if (e.data.size>0) chunksRef.current.push(e.data); };
           mr.onstop = () => {
-            const blob = new Blob(chunksRef.current, {type:'audio/webm'});
-            setRecBlob(blob); setFile('mic-recording.webm');
+            const blob = new Blob(chunksRef.current, {type: usedType});
+            const ext  = usedType.includes('mp4') ? 'm4a' : usedType.includes('ogg') ? 'ogg' : 'webm';
+            setRecBlob(blob); setFile('mic-recording.' + ext);
             try { stream.getTracks().forEach(t=>t.stop()); } catch(_){}
             if (rafRef.current) cancelAnimationFrame(rafRef.current);
           };
-          mr.start(); mediaRef.current = mr;
+          mr.onerror = (ev) => {
+            setMicError({title:'Recording error', body: (ev && ev.error && ev.error.message) || 'Unknown recorder error'});
+            try { stream.getTracks().forEach(t=>t.stop()); } catch(_){}
+            setRecording(false);
+          };
+          mr.start();
+          mediaRef.current = mr;
           setRecording(true); setRecBlob(null);
           startRef.current = performance.now();
           const tick = () => { setRecTime((performance.now()-startRef.current)/1000); rafRef.current=requestAnimationFrame(tick); };
           rafRef.current = requestAnimationFrame(tick);
-        } catch(_) { alert('Microphone access denied.'); }
+        } catch(e) {
+          try { stream.getTracks().forEach(t=>t.stop()); } catch(_){}
+          setMicError({title:'Could not start recorder', body: (e && e.message) || String(e)});
+        }
       };
 
       const stopRec = () => {
@@ -964,6 +1027,29 @@
                 </div>
               </button>
             </div>
+
+            {/* Mic error */}
+            {micError && (
+              <div style={{
+                marginTop:6, marginBottom:10,
+                padding:'10px 12px',
+                background:'oklch(0.95 0.05 25)',
+                border:'2.5px solid oklch(0.62 0.22 25)',
+                borderRadius:12, color:'#2A1F3D',
+                position:'relative',
+              }}>
+                <button onClick={()=>setMicError(null)} aria-label="Dismiss" style={{
+                  position:'absolute', top:6, right:8,
+                  background:'none', border:'none', fontSize:18, fontWeight:900,
+                  color:'#2A1F3D', cursor:'pointer', padding:'0 4px', lineHeight:1,
+                }}>×</button>
+                <div style={{fontSize:13, fontWeight:900, marginBottom:2, paddingRight:18}}>🎙️ {micError.title}</div>
+                <div style={{fontSize:12, fontWeight:600, lineHeight:1.35, opacity:0.85}}>{micError.body}</div>
+                {micError.raw && (
+                  <div style={{fontSize:10, fontWeight:700, marginTop:6, opacity:0.55, fontFamily:'monospace', wordBreak:'break-word'}}>{micError.raw}</div>
+                )}
+              </div>
+            )}
 
             {/* Preview */}
             {recBlob && !recording && (
