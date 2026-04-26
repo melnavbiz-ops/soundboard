@@ -1251,6 +1251,138 @@
       }, [sounds]);
     }
 
+    // ─── ShareDialog ────────────────────────────────────────────────────────────
+    function ShareDialog({sound, onClose, onToast}) {
+      const inputRef = React.useRef(null);
+      const [copied, setCopied] = React.useState(false);
+      if (!sound) return null;
+      const url = `${window.location.origin}${window.location.pathname}?s=${encodeURIComponent(sound.id)}`;
+
+      const copy = async () => {
+        try {
+          await navigator.clipboard.writeText(url);
+          setCopied(true);
+          onToast && onToast('🔗 Link copied!');
+          setTimeout(() => setCopied(false), 1800);
+          return;
+        } catch(_) {}
+        // Fallback for older browsers / non-secure contexts
+        try {
+          const el = inputRef.current;
+          if (el) {
+            el.focus(); el.select(); el.setSelectionRange(0, url.length);
+            document.execCommand && document.execCommand('copy');
+            setCopied(true);
+            onToast && onToast('🔗 Link copied!');
+            setTimeout(() => setCopied(false), 1800);
+          }
+        } catch(_){}
+      };
+
+      const nativeShare = async () => {
+        const data = {title:`Sojo Club: ${sound.name}`, text:`${sound.emoji||'🔊'} Listen to "${sound.name}"`, url};
+        try {
+          if (navigator.share && (!navigator.canShare || navigator.canShare(data))) {
+            await navigator.share(data);
+          }
+        } catch(e) {
+          if (e && e.name !== 'AbortError') onToast && onToast('Share cancelled');
+        }
+      };
+
+      const hasNativeShare = typeof navigator !== 'undefined' && !!navigator.share;
+
+      return (
+        <div onClick={onClose} style={{
+          position:'fixed', inset:0, zIndex:950,
+          background:'rgba(40,30,60,0.6)',
+          display:'flex', alignItems:'center', justifyContent:'center',
+          padding:'env(safe-area-inset-top) 16px env(safe-area-inset-bottom)',
+          animation:'fadeIn .2s ease',
+        }}>
+          <div onClick={e=>e.stopPropagation()} style={{
+            width:'100%', maxWidth:420,
+            background:'#FFF1E6',
+            border:'3px solid #2A1F3D',
+            borderRadius:24,
+            padding:'22px 22px 20px',
+            boxShadow:'8px 8px 0 #2A1F3D',
+            animation:'popIn .25s cubic-bezier(.2,.9,.3,1.2)',
+            position:'relative',
+          }}>
+            <button onClick={onClose} aria-label="Close" style={{
+              position:'absolute', top:12, right:12,
+              width:34, height:34, borderRadius:10,
+              background:'#FFF1E6', border:'2.5px solid #2A1F3D',
+              boxShadow:'2px 2px 0 #2A1F3D',
+              fontSize:18, fontWeight:900, color:'#2A1F3D',
+              cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center',
+              padding:0, lineHeight:1,
+            }}>×</button>
+
+            <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:6,paddingRight:40}}>
+              <div style={{fontSize:38, lineHeight:1}}>{sound.emoji || '🔗'}</div>
+              <div style={{minWidth:0, flex:1}}>
+                <div style={{fontSize:11,fontWeight:900,letterSpacing:1.2,color:'#2A1F3D',opacity:0.5,textTransform:'uppercase'}}>Share sound</div>
+                <div style={{fontSize:18,fontWeight:900,color:'#2A1F3D',letterSpacing:-0.4,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{sound.name}</div>
+              </div>
+            </div>
+
+            <p style={{fontSize:13,color:'#2A1F3D',opacity:0.7,marginTop:6,marginBottom:14,lineHeight:1.4}}>
+              Anyone with the link can play this sound directly.
+            </p>
+
+            <div style={{display:'flex',gap:8,marginBottom:12}}>
+              <input
+                ref={inputRef}
+                value={url}
+                readOnly
+                onFocus={e=>e.target.select()}
+                style={{
+                  flex:1, minWidth:0,
+                  padding:'12px 14px',
+                  fontSize:14, fontWeight:700,
+                  fontFamily:'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  background:'rgba(42,31,61,0.05)', color:'#2A1F3D',
+                  border:'2.5px solid #2A1F3D', outline:'none',
+                  borderRadius:12,
+                }}
+              />
+              <button onClick={copy} style={{
+                padding:'0 18px',
+                background: copied ? 'oklch(0.72 0.22 145)' : '#2A1F3D',
+                color: copied ? '#2A1F3D' : '#FFF1E6',
+                border:'2.5px solid #2A1F3D', borderRadius:12,
+                fontSize:13, fontWeight:900, letterSpacing:0.3,
+                cursor:'pointer', whiteSpace:'nowrap',
+                boxShadow:'3px 3px 0 oklch(0.72 0.22 30)',
+                display:'flex', alignItems:'center', gap:6,
+              }}>
+                {copied ? '✓ Copied' : '📋 Copy'}
+              </button>
+            </div>
+
+            {hasNativeShare && (
+              <button onClick={nativeShare} style={{
+                width:'100%', padding:'12px 14px',
+                background:'#FFF1E6', color:'#2A1F3D',
+                border:'2.5px dashed #2A1F3D', borderRadius:12,
+                fontSize:13, fontWeight:900, letterSpacing:0.3,
+                cursor:'pointer',
+                display:'flex', alignItems:'center', justifyContent:'center', gap:8,
+              }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2A1F3D" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/>
+                  <polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/>
+                </svg>
+                Share via…
+              </button>
+            )}
+          </div>
+        </div>
+      );
+    }
+
     // ─── SharedSoundOverlay ─────────────────────────────────────────────────────
     function SharedSoundOverlay({sound, loading, notFound, padColor, padColorDeep, isPlaying, isLoading, progress, onPlay, onStop, onShare, onClose}) {
       const base = sound ? padColor(sound.color, 0.82, 0.18) : 'rgba(42,31,61,0.06)';
@@ -1400,34 +1532,12 @@
         setTimeout(() => setToast(t => t === msg ? null : t), 2200);
       }, []);
 
-      const shareSound = React.useCallback(async (id) => {
+      // Share dialog: sound being shared (or null = closed)
+      const [shareDialogSound, setShareDialogSound] = React.useState(null);
+      const shareSound = React.useCallback((id) => {
         const s = sounds.find(x => x.id === id);
-        if (!s) return;
-        const url = `${window.location.origin}${window.location.pathname}?s=${encodeURIComponent(id)}`;
-        const shareData = {
-          title: `Sojo Club: ${s.name}`,
-          text: `${s.emoji || '🔊'} Listen to "${s.name}"`,
-          url,
-        };
-        try {
-          if (navigator.share) {
-            // Some browsers throw if canShare is missing or returns false; fall through to clipboard then.
-            if (!navigator.canShare || navigator.canShare(shareData)) {
-              await navigator.share(shareData);
-              return;
-            }
-          }
-        } catch(e) {
-          if (e && e.name === 'AbortError') return; // user cancelled
-        }
-        try {
-          await navigator.clipboard.writeText(url);
-          showToast('🔗 Link copied!');
-          return;
-        } catch(_) {}
-        // Last-resort: prompt
-        try { window.prompt('Copy this link:', url); } catch(_){}
-      }, [sounds, showToast]);
+        if (s) setShareDialogSound(s);
+      }, [sounds]);
 
       // Visible diagnostic toast for audio errors (so we can debug iOS without devtools)
       const [audioErr, setAudioErr] = React.useState(null);
@@ -1655,6 +1765,29 @@
               </div>
             </div>
 
+            {/* Share */}
+            <button
+              onClick={()=>activeSound&&shareSound(activeSound.id)}
+              disabled={!activeSound}
+              aria-label="Share sound"
+              title={activeSound ? 'Share this sound' : 'Tap a sound first'}
+              style={{
+                width:38,height:38,borderRadius:10,flexShrink:0,
+                background: activeSound ? 'oklch(0.85 0.15 220)' : 'rgba(255,241,230,0.1)',
+                color: activeSound ? '#2A1F3D' : '#FFF1E6',
+                border:'2px solid rgba(255,241,230,0.4)',
+                cursor: activeSound ? 'pointer' : 'default',
+                opacity: activeSound ? 1 : 0.5,
+                display:'flex',alignItems:'center',justifyContent:'center',
+                transition:'all .2s', padding:0,
+              }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+                <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+              </svg>
+            </button>
+
             {/* Loop */}
             <button onClick={()=>setLoop(l=>!l)} style={{
               width:38,height:38,borderRadius:10,flexShrink:0,
@@ -1717,6 +1850,12 @@
               onClose={dismissShared}
             />
           )}
+
+          <ShareDialog
+            sound={shareDialogSound}
+            onClose={()=>setShareDialogSound(null)}
+            onToast={showToast}
+          />
 
           <AddSoundModal
             open={addOpen || !!editingSound}
