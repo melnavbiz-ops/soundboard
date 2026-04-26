@@ -865,7 +865,7 @@
           chunksRef.current = [];
           const mr = mime ? new MediaRecorder(stream, {mimeType: mime}) : new MediaRecorder(stream);
           const usedType = mr.mimeType || mime || 'audio/webm';
-          mr.stream = stream;
+          // NB: MediaRecorder.stream is a read-only getter on Chrome — no assignment needed.
           mr.ondataavailable = e => { if (e.data.size>0) chunksRef.current.push(e.data); };
           mr.onstop = () => {
             const blob = new Blob(chunksRef.current, {type: usedType});
