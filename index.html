@@ -698,7 +698,7 @@
                 : active ? 'translate(0,-1px)' : 'translate(0,0)',
               transition:'transform .1s cubic-bezier(.2,.8,.3,1.2), box-shadow .1s',
               cursor:'pointer', userSelect:'none', WebkitUserSelect:'none',
-              display:'flex', flexDirection:'column', padding:10,
+              display:'flex', flexDirection:'column', padding:12,
               animation: active ? 'clayWobble 0.4s ease-in-out infinite' : 'none',
               opacity: loading ? 0.7 : 1,
             }}
@@ -712,6 +712,25 @@
                 fontSize:12, fontWeight:900,
                 boxShadow:'2px 2px 0 #2A1F3D', transform:'rotate(15deg)',
               }}>★</div>
+            )}
+            {!editMode && (
+              <button
+                onMouseDown={e=>e.stopPropagation()}
+                onTouchStart={e=>{e.stopPropagation();}}
+                onTouchEnd={e=>{e.stopPropagation();e.preventDefault();setShowMenu(true);}}
+                onClick={e=>{e.stopPropagation();e.preventDefault();setShowMenu(true);}}
+                aria-label="Options"
+                style={{
+                  position:'absolute', top:-8, left:-8, zIndex:4,
+                  width:26, height:26, borderRadius:'50%',
+                  background:'#FFF1E6', color:'#2A1F3D',
+                  border:'2.5px solid #2A1F3D',
+                  boxShadow:'2px 2px 0 #2A1F3D',
+                  fontSize:16, fontWeight:900, lineHeight:1,
+                  cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center',
+                  transform:'rotate(-10deg)',
+                  padding:0,
+                }}>⋯</button>
             )}
             {editMode && (
               <button
@@ -749,11 +768,12 @@
             </div>
 
             <div style={{
-              fontSize:'clamp(9px,2.5vw,11px)', fontWeight:900,
+              fontSize:'clamp(10px,2.8vw,12.5px)', fontWeight:900,
               textAlign:'center', color:'#2A1F3D', letterSpacing:-0.2,
               whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
               textTransform:'uppercase',
               minWidth:0, maxWidth:'100%',
+              marginTop:4,
             }}>{sound.name}</div>
 
             {active && (
@@ -1245,7 +1265,7 @@
         sounds.forEach(s => {
           let h = 0;
           for (let i = 0; i < s.id.length; i++) h = (h*31 + s.id.charCodeAt(i)) | 0;
-          m[s.id] = ((h%100)/100 - 0.5) * 6;
+          m[s.id] = ((h%100)/100 - 0.5) * 2.5;
         });
         return m;
       }, [sounds]);
@@ -1623,7 +1643,7 @@
                   fontWeight:900,letterSpacing:-1.5,lineHeight:0.95,color:'#2A1F3D',
                 }}>SOUNDBOARD<br />
                   <span style={{fontSize:'clamp(13px,4vw,16px)',fontWeight:700,letterSpacing:0,color:'oklch(0.55 0.2 340)'}}>
-                    tap any pad to party
+                    tap to play · hold ⋯ for options
                   </span>
                 </h1>
               </div>
@@ -1703,7 +1723,7 @@
           {/* Pad grid */}
           <div style={{
             flex:1,
-            padding:`14px clamp(14px,5vw,20px) ${activeSound?170:90}px`,
+            padding:`8px clamp(14px,5vw,20px) ${activeSound?170:90}px`,
             overflowY:'auto',position:'relative',zIndex:2,
           }}>
             {filtered.length === 0 ? (
@@ -1713,8 +1733,8 @@
             ) : (
               <div style={{
                 display:'grid',
-                gridTemplateColumns:'repeat(3, minmax(0, 1fr))',
-                gap:'clamp(10px,3vw,16px)',
+                gridTemplateColumns:'repeat(auto-fill, minmax(96px, 1fr))',
+                gap:'clamp(14px,4vw,22px)',
               }}>
                 {filtered.map(s => (
                   <ClayPad key={s.id} sound={s} tilt={tilts[s.id]||0}
