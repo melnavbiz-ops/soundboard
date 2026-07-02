@@ -571,13 +571,33 @@
         setTimeout(() => setConfetti([]), 800);
       };
 
-      const onStart = () => setPressed(true);
+      // Tracks whether a touch/mouse press turned into a scroll/drag, so
+      // scrolling the list doesn't also trigger tap-to-play on the row
+      // the gesture happened to start on.
+      const pressOrigin = React.useRef(null);
+      const dragged = React.useRef(false);
+      const DRAG_THRESHOLD = 10;
+
+      const onStart = (x, y) => {
+        pressOrigin.current = {x, y};
+        dragged.current = false;
+        setPressed(true);
+      };
+      const onPressMove = (x, y) => {
+        if (!pressOrigin.current || dragged.current) return;
+        const dx = x - pressOrigin.current.x, dy = y - pressOrigin.current.y;
+        if (Math.hypot(dx, dy) > DRAG_THRESHOLD) { dragged.current = true; setPressed(false); }
+      };
       const onEnd = () => {
         setPressed(false);
+        const wasDrag = dragged.current;
+        pressOrigin.current = null;
+        dragged.current = false;
+        if (wasDrag) return; // scrolled past this row — not a tap
         if (editMode) { onEdit && onEdit(); return; } // tap in edit mode = open edit details
         triggerConfetti(); onTap();
       };
-      const onLeave = () => setPressed(false);
+      const onLeave = () => { setPressed(false); pressOrigin.current = null; dragged.current = false; };
 
       const handleDeleteTap = (e) => {
         e.stopPropagation(); e.preventDefault();
@@ -685,8 +705,11 @@
           )}
 
           <div
-            onMouseDown={onStart} onMouseUp={onEnd} onMouseLeave={onLeave}
-            onTouchStart={e=>{e.preventDefault();onStart();}}
+            onMouseDown={e=>onStart(e.clientX, e.clientY)}
+            onMouseMove={e=>{ if (e.buttons === 1) onPressMove(e.clientX, e.clientY); }}
+            onMouseUp={onEnd} onMouseLeave={onLeave}
+            onTouchStart={e=>onStart(e.touches[0].clientX, e.touches[0].clientY)}
+            onTouchMove={e=>onPressMove(e.touches[0].clientX, e.touches[0].clientY)}
             onTouchEnd={e=>{e.preventDefault();onEnd();}}
             onTouchCancel={onLeave}
             style={{
